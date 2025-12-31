@@ -72,22 +72,32 @@ list_archive_files_7z() {
   local archive="$1"
   local line path attrs started=0
 
+  flush_entry() {
+    if [[ -n "$path" && "$attrs" != *D* ]]; then
+      printf '%s\0' "$path"
+    fi
+    path=""
+    attrs=""
+  }
+
   while IFS= read -r line; do
     line="${line%$'\r'}"
+
     if [[ "$line" == "----------" ]]; then
       if [[ "$started" -eq 0 ]]; then
         started=1
       else
-        if [[ -n "$path" && "$attrs" != *D* ]]; then
-          printf '%s\0' "$path"
-        fi
+        flush_entry
       fi
-      path=""
-      attrs=""
       continue
     fi
 
     [[ "$started" -eq 0 ]] && continue
+
+    if [[ -z "$line" ]]; then
+      flush_entry
+      continue
+    fi
 
     if [[ "$line" == Path\ =\ * ]]; then
       path="${line#Path = }"
@@ -96,9 +106,7 @@ list_archive_files_7z() {
     fi
   done < <("$SEVENZ_BIN" l -slt -- "$archive")
 
-  if [[ -n "$path" && "$attrs" != *D* ]]; then
-    printf '%s\0' "$path"
-  fi
+  flush_entry
 }
 
 detect_tar_compression() {
