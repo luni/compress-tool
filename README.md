@@ -77,7 +77,9 @@ Run `./analyze-archive.sh ARCHIVE` to compute the SHA-256 of every entry inside 
 or zip file without extracting it to disk. Each digest is streamed to stdout for
 live progress and also written to `ARCHIVE.sha256`, which is sorted by path
 before being saved; override the destination with `--output FILE`. Add `--quiet`
-to suppress the progress logs if desired. The script automatically picks the
+to suppress the progress logs if desired. Existing manifests are skipped unless
+`--overwrite` is supplied, and empty archives do not leave behind an empty
+output file. The script automatically picks the
 available `7z`/`7zr` binary and uses parallel decompressors (`pigz`, `pbzip2`,
 `pixz`, `pzstd`) to handle compressed tarballs efficiently.
 

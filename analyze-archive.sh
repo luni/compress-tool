@@ -2,14 +2,10 @@
 set -euo pipefail
 
 tmp_manifest=""
-tar_stream_helper=""
 
 cleanup() {
   if [[ -n "$tmp_manifest" && -f "$tmp_manifest" ]]; then
     rm -f "$tmp_manifest"
-  fi
-  if [[ -n "$tar_stream_helper" && -f "$tar_stream_helper" ]]; then
-    rm -f "$tar_stream_helper"
   fi
 }
 
@@ -139,52 +135,6 @@ tar_extract_entry() {
   esac
 }
 
-create_tar_stream_helper() {
-  if [[ -n "$tar_stream_helper" && -x "$tar_stream_helper" ]]; then
-    return 0
-  fi
-  tar_stream_helper="$(mktemp)"
-  cat >"$tar_stream_helper" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-if [[ -z "${TAR_MODE:-}" || "${TAR_MODE:0:1}" != "-" ]]; then
-  exit 0
-fi
-if [[ "${QUIET:-0}" -eq 0 ]]; then
-  printf 'processing: %s\n' "$TAR_FILENAME" >&2
-fi
-read -r hash _ < <(sha256sum)
-printf '%s\t%s\n' "$hash" "$TAR_FILENAME"
-EOF
-  chmod +x "$tar_stream_helper"
-}
-
-stream_tar_archive_entries() {
-  local archive="$1"
-  create_tar_stream_helper
-  local tar_cmd=(tar --extract --to-command="$tar_stream_helper")
-  case "$TAR_COMPRESSION" in
-    gz)
-      pigz -dc -- "$archive" | "${tar_cmd[@]}" -f -
-      ;;
-    bz2)
-      pbzip2 -dc -- "$archive" | "${tar_cmd[@]}" -f -
-      ;;
-    xz)
-      pixz -d -c -- "$archive" | "${tar_cmd[@]}" -f -
-      ;;
-    zst)
-      pzstd -d -q -c -- "$archive" | "${tar_cmd[@]}" -f -
-      ;;
-    none)
-      "${tar_cmd[@]}" -f "$archive"
-      ;;
-    *)
-      die "Unsupported tar compression: $TAR_COMPRESSION"
-      ;;
-  esac
-}
-
 list_archive_files_tar() {
   local archive="$1" entry
   while IFS= read -r entry; do
@@ -240,6 +190,7 @@ compute_sha256() {
 ARCHIVE=""
 OUTPUT_FILE=""
 QUIET=0
+OVERWRITE=0
 ARCHIVE_TYPE="7z"
 SEVENZ_BIN="7z"
 TAR_COMPRESSION="none"
@@ -265,6 +216,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     -q|--quiet)
       QUIET=1
+      shift
+      ;;
+    --overwrite)
+      OVERWRITE=1
       shift
       ;;
     -h|--help)
@@ -325,37 +280,30 @@ if [[ -z "$OUTPUT_FILE" ]]; then
   OUTPUT_FILE="$(default_output_path "$ARCHIVE")"
 fi
 
+if [[ -e "$OUTPUT_FILE" && "$OVERWRITE" -ne 1 ]]; then
+  log "skip (manifest exists): $OUTPUT_FILE"
+  exit 0
+fi
+
 mkdir -p -- "$(dirname -- "$OUTPUT_FILE")"
-: >"$OUTPUT_FILE"
 tmp_manifest="$(mktemp)"
 trap cleanup EXIT
-
-export QUIET
 
 log "Writing SHA-256 manifest to $OUTPUT_FILE"
 
 files_processed=0
-if [[ "$ARCHIVE_TYPE" == "tar" ]]; then
-  if ! stream_tar_archive_entries "$ARCHIVE" | tee -a "$tmp_manifest"; then
-    die "Failed to process tar archive $ARCHIVE"
+while IFS= read -r -d '' entry; do
+  files_processed=$((files_processed + 1))
+  log "processing: $entry"
+  if ! hash="$(compute_sha256 "$ARCHIVE" "$entry")"; then
+    die "Failed to compute SHA-256 for $entry"
   fi
-  if [[ -s "$tmp_manifest" ]]; then
-    files_processed="$(wc -l <"$tmp_manifest")"
-  fi
-else
-  while IFS= read -r -d '' entry; do
-    files_processed=$((files_processed + 1))
-    log "processing: $entry"
-    if ! hash="$(compute_sha256 "$ARCHIVE" "$entry")"; then
-      die "Failed to compute SHA-256 for $entry"
-    fi
-    printf '%s\t%s\n' "$hash" "$entry" | tee -a "$tmp_manifest"
-  done < <(list_archive_files "$ARCHIVE")
-fi
+  printf '%s\t%s\n' "$hash" "$entry" | tee -a "$tmp_manifest"
+done < <(list_archive_files "$ARCHIVE")
 
 if [[ "$files_processed" -eq 0 ]]; then
   log "No files found inside archive."
-  : >"$OUTPUT_FILE"
+  rm -f -- "$OUTPUT_FILE"
 else
   LC_ALL=C sort -t $'\t' -k2,2 "$tmp_manifest" | awk -F $'\t' '{printf "%s  %s\n",$1,$2}' >"$OUTPUT_FILE"
   log "Processed $files_processed file(s)."
