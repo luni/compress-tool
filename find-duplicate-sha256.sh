@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  find-duplicate-sha256.sh [DIRECTORY...]
+  find-duplicate-sha256.sh [OPTIONS] [DIRECTORY...]
 
 Description:
   Recursively scans the provided directories (defaults to ".") for files
@@ -14,7 +14,11 @@ Description:
   content across archives quickly.
 
 Options:
-  -h, --help    Show this help message.
+  -A, --identical-archives   Only report archives whose manifests are identical
+                             (same set of files + hashes). Requires sha256sum.
+  -S, --skip-intra-manifest  Ignore hashes that appear more than once inside the
+                             same manifest (only care about cross-archive dupes).
+  -h, --help                 Show this help message.
 EOF
 }
 
@@ -23,9 +27,21 @@ die() {
   exit 2
 }
 
+require_tool() {
+  command -v "$1" >/dev/null 2>&1 || die "Required tool '$1' is not on PATH."
+}
+
 SEP=$'\x1F'
+GROUP_SEP=$'\x1E'
+IDENTICAL_ONLY=0
+SKIP_INTRA_MANIFEST=0
+
 declare -A HASH_COUNTS=()
 declare -A HASH_LOCATIONS=()
+declare -A SIGNATURE_MANIFESTS=()
+declare -A MANIFEST_ENTRY_COUNTS=()
+declare -A HASH_MANIFEST_SEEN=()
+declare -A HASH_UNIQUE_MANIFEST_COUNT=()
 
 record_entry() {
   local hash="$1" manifest="$2" entry="$3"
@@ -35,6 +51,11 @@ record_entry() {
   else
     HASH_LOCATIONS["$hash"]="$manifest$SEP$entry"
   fi
+  local combination="$hash$GROUP_SEP$manifest"
+  if [[ ! -v HASH_MANIFEST_SEEN["$combination"] ]]; then
+    HASH_MANIFEST_SEEN["$combination"]=1
+    HASH_UNIQUE_MANIFEST_COUNT["$hash"]=$(( ${HASH_UNIQUE_MANIFEST_COUNT["$hash"]:-0} + 1 ))
+  fi
 }
 
 entries_recorded=0
@@ -42,6 +63,7 @@ lines_skipped=0
 
 process_manifest() {
   local manifest="$1" line line_no=0 manifest_entries=0
+  local -a manifest_pairs=()
   while IFS= read -r line || [[ -n "$line" ]]; do
     line_no=$((line_no + 1))
     line="${line%$'\r'}"
@@ -49,6 +71,7 @@ process_manifest() {
     [[ "$line" =~ ^[[:space:]]*# ]] && continue
     if [[ "$line" =~ ^([[:xdigit:]]{64})[[:space:]][[:space:]]+(.+)$ ]]; then
       record_entry "${BASH_REMATCH[1]}" "$manifest" "${BASH_REMATCH[2]}"
+      manifest_pairs+=("${BASH_REMATCH[1]}$SEP${BASH_REMATCH[2]}")
       entries_recorded=$((entries_recorded + 1))
       manifest_entries=$((manifest_entries + 1))
     else
@@ -57,14 +80,38 @@ process_manifest() {
     fi
   done <"$manifest"
 
+  MANIFEST_ENTRY_COUNTS["$manifest"]=$manifest_entries
+
   if [[ "$manifest_entries" -eq 0 ]]; then
     printf 'note: %s contained no recognizable entries\n' "$manifest" >&2
+  fi
+
+  if (( IDENTICAL_ONLY )); then
+    local signature
+    if ((${#manifest_pairs[@]} > 0)); then
+      signature="$(printf '%s\n' "${manifest_pairs[@]}" | LC_ALL=C sort | sha256sum | awk '{print $1}')"
+    else
+      signature="$(printf '' | sha256sum | awk '{print $1}')"
+    fi
+    if [[ -v SIGNATURE_MANIFESTS["$signature"] ]]; then
+      SIGNATURE_MANIFESTS["$signature"]+="$GROUP_SEP$manifest"
+    else
+      SIGNATURE_MANIFESTS["$signature"]="$manifest"
+    fi
   fi
 }
 
 dirs=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    -A|--identical-archives)
+      IDENTICAL_ONLY=1
+      shift
+      ;;
+    -S|--skip-intra-manifest)
+      SKIP_INTRA_MANIFEST=1
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -95,6 +142,10 @@ for dir in "${dirs[@]}"; do
   [[ -d "$dir" ]] || die "Directory not found: $dir"
 done
 
+if (( IDENTICAL_ONLY )); then
+  require_tool sha256sum
+fi
+
 manifests_scanned=0
 while IFS= read -r -d '' manifest; do
   manifests_scanned=$((manifests_scanned + 1))
@@ -108,10 +159,36 @@ fi
 printf 'Scanned %d manifest(s); %d total entries (%d unique hashes). Skipped %d line(s).\n' \
   "$manifests_scanned" "$entries_recorded" "${#HASH_COUNTS[@]}" "$lines_skipped"
 
+if (( IDENTICAL_ONLY )); then
+  identical_groups_found=0
+  for signature in "${!SIGNATURE_MANIFESTS[@]}"; do
+    IFS=$GROUP_SEP read -r -a manifests_in_group <<<"${SIGNATURE_MANIFESTS["$signature"]}"
+    if ((${#manifests_in_group[@]} > 1)); then
+      identical_groups_found=1
+      entries="${MANIFEST_ENTRY_COUNTS["${manifests_in_group[0]}"]:-0}"
+      printf '\nArchives with identical contents (%d entries):\n' "$entries"
+      for manifest in "${manifests_in_group[@]}"; do
+        printf '  - %s\n' "$manifest"
+      done
+    fi
+  done
+
+  if (( identical_groups_found == 0 )); then
+    printf 'No archives with identical contents were found.\n'
+  fi
+  exit 0
+fi
+
 duplicate_hashes=()
 for hash in "${!HASH_COUNTS[@]}"; do
-  if (( HASH_COUNTS["$hash"] > 1 )); then
-    duplicate_hashes+=("$hash")
+  if (( SKIP_INTRA_MANIFEST )); then
+    if (( ${HASH_UNIQUE_MANIFEST_COUNT["$hash"]:-0} > 1 )); then
+      duplicate_hashes+=("$hash")
+    fi
+  else
+    if (( HASH_COUNTS["$hash"] > 1 )); then
+      duplicate_hashes+=("$hash")
+    fi
   fi
 done
 
@@ -124,9 +201,20 @@ printf '\nDuplicate SHA-256 digests:\n'
 IFS=$'\n' read -r -d '' -a duplicate_hashes < <(printf '%s\n' "${duplicate_hashes[@]}" | LC_ALL=C sort && printf '\0')
 
 for hash in "${duplicate_hashes[@]}"; do
-  printf '\nSHA256 %s (%d occurrences):\n' "$hash" "${HASH_COUNTS["$hash"]}"
+  display_count="${HASH_COUNTS["$hash"]}"
+  if (( SKIP_INTRA_MANIFEST )); then
+    display_count="${HASH_UNIQUE_MANIFEST_COUNT["$hash"]:-0}"
+  fi
+  printf '\nSHA256 %s (%d occurrences):\n' "$hash" "$display_count"
+  printed_manifest_list=""
   while IFS= read -r location || [[ -n "$location" ]]; do
     IFS=$SEP read -r manifest entry <<<"$location"
+    if (( SKIP_INTRA_MANIFEST )); then
+      if [[ ":$printed_manifest_list:" == *":$manifest:"* ]]; then
+        continue
+      fi
+      printed_manifest_list="${printed_manifest_list:+$printed_manifest_list:}$manifest"
+    fi
     printf '  - %s :: %s\n' "$manifest" "$entry"
   done <<<"${HASH_LOCATIONS["$hash"]}"
 done
