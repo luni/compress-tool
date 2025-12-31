@@ -8,6 +8,9 @@ parallel, while bigger blobs are streamed sequentially with progress output.
 artifacts while restoring the original modification time.
 `analyze-archive.sh` inspects `.7z`, `.tar*`, or `.zip` archives and produces a
 sorted manifest with the SHA-256 of every file inside without touching disk.
+`find-duplicate-sha256.sh` scans directories for those manifests and reports
+when the same digest appears in multiple archives, making it easier to spot
+duplicate payloads.
 
 ## Required tools
 
@@ -95,6 +98,19 @@ The example above scans `/data/archives`, sends each archive path to
 `analyze-archive.sh` using eight concurrent workers, and keeps a progress bar
 (`--eta`). Adjust the `find` predicate, job count (`-j`), or output location
 (`--output`) as needed for your environment.
+
+### Detect duplicate payloads across manifests
+
+Once you have a collection of `.sha256` manifests you can identify archives that
+contain identical files (same SHA-256 digest) by scanning the directory tree:
+
+```
+./find-duplicate-sha256.sh /data/archives/manifests
+```
+
+Every repeated digest is printed alongside the manifest file that referenced it
+and the original path inside the archive, helping you prune redundant backups or
+cross-check data integrity.
 
 ## Decompression
 
