@@ -17,10 +17,10 @@ jobs:
 
       - name: Install test dependencies
         run: |
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+          sudo apt-get update
+          DEBIAN_FRONTEND=noninteractive sudo apt-get install -y --no-install-recommends \
             xz-utils pixz zstd parallel pv
-          rm -rf /var/lib/apt/lists/*
+          sudo rm -rf /var/lib/apt/lists/*
 
       - name: Run tests
         run: tests/run.sh
