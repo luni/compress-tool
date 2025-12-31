@@ -232,8 +232,9 @@ run_compress_test() {
   run_single_compress_test zstd zstd "zstd-only"
 }
 
-run_decompress_test() {
-  log "Running decompress.sh test"
+run_single_decompress_test() {
+  local remove_flag="$1" label="$2"
+  log "Running decompress.sh test (${label})"
 
   local tmpdir
   tmpdir="$(mktemp -d)"
@@ -255,12 +256,12 @@ run_decompress_test() {
     zstd
   )
 
-  declare -A expected_paths
+  declare -A expected_paths compressed_paths
   for idx in "${!files[@]}"; do
     local path="${files[$idx]}"
     local compressor="${compressors[$idx]}"
     mkdir -p -- "$(dirname -- "$path")"
-    generate_test_file "$path" "${sizes[$idx]}" "Decompression payload $idx"
+    generate_test_file "$path" "${sizes[$idx]}" "Decompression payload $idx (${label})"
     expected_paths["$path"]="${path}.expected"
     cp -- "$path" "${expected_paths[$path]}"
 
@@ -270,21 +271,44 @@ run_decompress_test() {
       xz) xz -c -- "$path" >"$compressed" ;;
       zstd) zstd -q -c -- "$path" >"$compressed" ;;
     esac
+    compressed_paths["$path"]="$compressed"
     rm -f -- "$path"
   done
 
-  "$DECOMPRESS_SCRIPT" --dir "$tmpdir" >/dev/null
+  local args=(--dir "$tmpdir")
+  if [[ "$remove_flag" == "true" ]]; then
+    args+=(--remove-compressed)
+  fi
+  "$DECOMPRESS_SCRIPT" "${args[@]}" >/dev/null
 
   for path in "${files[@]}"; do
     if [[ ! -f "$path" ]]; then
-      echo "decompress.sh did not recreate original file: $path" >&2
+      echo "decompress.sh did not recreate original file: $path (${label})" >&2
       return 1
     fi
     if ! cmp -s "${expected_paths[$path]}" "$path"; then
-      echo "Decompressed contents differ for $path" >&2
+      echo "Decompressed contents differ for $path (${label})" >&2
       return 1
     fi
+
+    local compressed="${compressed_paths[$path]}"
+    if [[ "$remove_flag" == "true" ]]; then
+      if [[ -e "$compressed" ]]; then
+        echo "Compressed file was not removed (${label}): $compressed" >&2
+        return 1
+      fi
+    else
+      if [[ ! -e "$compressed" ]]; then
+        echo "Compressed file unexpectedly removed (${label}): $compressed" >&2
+        return 1
+      fi
+    fi
   done
+}
+
+run_decompress_test() {
+  run_single_decompress_test false "keep-compressed"
+  run_single_decompress_test true "remove-compressed"
 }
 
 main() {
