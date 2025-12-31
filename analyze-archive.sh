@@ -292,14 +292,73 @@ trap cleanup EXIT
 log "Writing SHA-256 manifest to $OUTPUT_FILE"
 
 files_processed=0
-while IFS= read -r -d '' entry; do
-  files_processed=$((files_processed + 1))
-  log "processing: $entry"
-  if ! hash="$(compute_sha256 "$ARCHIVE" "$entry")"; then
-    die "Failed to compute SHA-256 for $entry"
+# Optimization for tar files - process all entries in a single decompression pass
+if [[ "$ARCHIVE_TYPE" == "tar" ]]; then
+  log "Using optimized tar processing"
+  entries=()
+  while IFS= read -r -d '' entry; do
+    entries+=("$entry")
+    files_processed=$((files_processed + 1))
+  done < <(list_archive_files "$ARCHIVE")
+
+  if [[ ${#entries[@]} -gt 0 ]]; then
+    log "Processing ${#entries[@]} files in a single pass"
+
+    # Process all files in a single decompression pass
+    case "$TAR_COMPRESSION" in
+      gz)
+        pigz -dc -- "$ARCHIVE" | tar -xO --to-command='
+          f="${TAR_FILENAME}"
+          echo "processing: $f" >&2
+          hash=$(sha256sum | cut -d" " -f1)
+          echo "$hash	$f"
+        ' -- "${entries[@]}" >> "$tmp_manifest"
+        ;;
+      bz2)
+        pbzip2 -dc -- "$ARCHIVE" | tar -xO --to-command='
+          f="${TAR_FILENAME}"
+          echo "processing: $f" >&2
+          hash=$(sha256sum | cut -d" " -f1)
+          echo "$hash	$f"
+        ' -- "${entries[@]}" >> "$tmp_manifest"
+        ;;
+      xz)
+        pixz -d -c -- "$ARCHIVE" | tar -xO --to-command='
+          f="${TAR_FILENAME}"
+          echo "processing: $f" >&2
+          hash=$(sha256sum | cut -d" " -f1)
+          echo "$hash	$f"
+        ' -- "${entries[@]}" >> "$tmp_manifest"
+        ;;
+      zst)
+        pzstd -d -q -c -- "$ARCHIVE" | tar -xO --to-command='
+          f="${TAR_FILENAME}"
+          echo "processing: $f" >&2
+          hash=$(sha256sum | cut -d" " -f1)
+          echo "$hash	$f"
+        ' -- "${entries[@]}" >> "$tmp_manifest"
+        ;;
+      none)
+        tar -xO --to-command='
+          f="${TAR_FILENAME}"
+          echo "processing: $f" >&2
+          hash=$(sha256sum | cut -d" " -f1)
+          echo "$hash	$f"
+        ' -- "${entries[@]}" "$ARCHIVE" >> "$tmp_manifest"
+        ;;
+    esac
   fi
-  printf '%s\t%s\n' "$hash" "$entry" | tee -a "$tmp_manifest"
-done < <(list_archive_files "$ARCHIVE")
+else
+  # Original processing for non-tar files
+  while IFS= read -r -d '' entry; do
+    files_processed=$((files_processed + 1))
+    log "processing: $entry"
+    if ! hash="$(compute_sha256 "$ARCHIVE" "$entry")"; then
+      die "Failed to compute SHA-256 for $entry"
+    fi
+    printf '%s\t%s\n' "$hash" "$entry" | tee -a "$tmp_manifest"
+  done < <(list_archive_files "$ARCHIVE")
+fi
 
 if [[ "$files_processed" -eq 0 ]]; then
   log "No files found inside archive."
