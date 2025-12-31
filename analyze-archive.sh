@@ -30,6 +30,7 @@ Description:
 Options:
   -o, --output FILE   Target SHA-256 manifest (default: ARCHIVE basename + .sha256)
   -q, --quiet         Suppress progress logs
+      --overwrite     Overwrite existing manifest if present
   -h, --help          Show this help message
 EOF
 }
