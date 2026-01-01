@@ -595,16 +595,17 @@ main() {
   printf 'Test plan (%d total):\n' "${#tests[@]}"
   for idx in "${!tests[@]}"; do
     local entry="${tests[$idx]}"
-    local fn label
-    IFS="::" read -r fn label <<<"$entry"
+    local fn="${entry%%::*}"
+    local label="${entry#*::}"
     printf '  [%d/%d] %s -> %s\n' "$((idx + 1))" "${#tests[@]}" "$fn" "$label"
   done
 
   for idx in "${!tests[@]}"; do
     local entry="${tests[$idx]}"
-    local fn label
-    IFS="::" read -r fn label <<<"$entry"
-    log "[${idx + 1}/${#tests[@]}] $label"
+    local fn="${entry%%::*}"
+    local label="${entry#*::}"
+    local seq=$((idx + 1))
+    log "[${seq}/${#tests[@]}] $label"
     "$fn"
   done
 
