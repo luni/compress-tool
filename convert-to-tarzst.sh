@@ -385,6 +385,8 @@ fi
 
 mkdir -p -- "$(dirname -- "$OUTPUT")"
 TMP_OUTPUT="$(mktemp -p "$(dirname -- "$OUTPUT")" "$(basename -- "$OUTPUT").tmp.XXXXXX")"
+# mktemp creates the destination path as a file; remove it so pzstd can create it.
+rm -f -- "$TMP_OUTPUT"
 
 tar_stream() {
   if [[ -z "$(find "$WORKDIR" -mindepth 1 -print -quit)" ]]; then
