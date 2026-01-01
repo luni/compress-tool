@@ -131,16 +131,16 @@ tar_list_entries() {
   run_tar_list() {
     case "$compression" in
       gz)
-        require_cmd pigz
-        pigz -dc -- "$archive" | tar -tf -
+        require_cmd gzip
+        gzip -dc -- "$archive" | tar -tf -
         ;;
       bz2)
-        require_cmd pbzip2
-        pbzip2 -dc -- "$archive" | tar -tf -
+        require_cmd bzip2
+        bzip2 -dc -- "$archive" | tar -tf -
         ;;
       xz)
-        require_cmd pixz
-        pixz -dc -- "$archive" | tar -tf -
+        require_cmd xz
+        xz -dc -- "$archive" | tar -tf -
         ;;
       none) tar -tf "$archive" ;;
     esac
@@ -195,25 +195,13 @@ EOF
 
   case "$compression" in
     gz)
-      if command -v pigz >/dev/null 2>&1; then
-        pigz -dc -- "$archive" | tar --null --files-from="$tmp_files" --to-command="$tmp_command" -xf - 2>/dev/null || true
-      else
-        gzip -dc -- "$archive" | tar --null --files-from="$tmp_files" --to-command="$tmp_command" -xf - 2>/dev/null || true
-      fi
+      gzip -dc -- "$archive" | tar --null --files-from="$tmp_files" --to-command="$tmp_command" -xf - 2>/dev/null || true
       ;;
     bz2)
-      if command -v pbzip2 >/dev/null 2>&1; then
-        pbzip2 -dc -- "$archive" | tar --null --files-from="$tmp_files" --to-command="$tmp_command" -xf - 2>/dev/null || true
-      else
-        bzip2 -dc -- "$archive" | tar --null --files-from="$tmp_files" --to-command="$tmp_command" -xf - 2>/dev/null || true
-      fi
+      bzip2 -dc -- "$archive" | tar --null --files-from="$tmp_files" --to-command="$tmp_command" -xf - 2>/dev/null || true
       ;;
     xz)
-      if command -v pixz >/dev/null 2>&1; then
-        pixz -dc -- "$archive" | tar --null --files-from="$tmp_files" --to-command="$tmp_command" -xf - 2>/dev/null || true
-      else
-        xz -dc -- "$archive" | tar --null --files-from="$tmp_files" --to-command="$tmp_command" -xf - 2>/dev/null || true
-      fi
+      xz -dc -- "$archive" | tar --null --files-from="$tmp_files" --to-command="$tmp_command" -xf - 2>/dev/null || true
       ;;
     none)
       tar --null --files-from="$tmp_files" --to-command="$tmp_command" -xf "$archive" 2>/dev/null || true
@@ -263,8 +251,8 @@ setup_stream_input() {
       ;;
     tar.xz)
       require_cmd pixz
-      INPUT_STREAM_CMD=(pixz -dc -- "$ARCHIVE")
-      INPUT_STREAM_DESC="pixz -dc"
+      INPUT_STREAM_CMD=(pixz -k -d -- "$ARCHIVE" /dev/stdout)
+      INPUT_STREAM_DESC="pixz -d"
       ;;
     tar.bz2)
       require_cmd pbzip2

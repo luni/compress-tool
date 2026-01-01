@@ -140,11 +140,13 @@ run_suites() {
     local script_name="${entry%%::*}"
     local label="${entry#*::}"
     local script_path="$SUITES_DIR/$script_name"
+    local seq=$((idx + 1))
+    local total="${#suites_ref[@]}"
     if [[ ! -x "$script_path" ]]; then
       echo "Test suite not found or not executable: $script_path" >&2
       return 1
     fi
-    log "[${idx + 1}/${#suites_ref[@]}] $label"
+    log "[${seq}/${total}] $label"
     "$script_path"
   done
 }
