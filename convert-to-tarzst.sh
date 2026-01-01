@@ -13,31 +13,40 @@ SHA256_ENABLED=0
 SHA256_APPEND=0
 ZEEKSTD_BIN_FROM_FLAG=0
 ZEEKSTD_BIN="${ZEEKSTD_BIN:-${HOME}/.cargo/bin/zeekstd}"
+ARCHIVE_TYPE=""
+INPUT_STREAM_DESC=""
 declare -a ZEEKSTD_ARGS
+declare -a INPUT_STREAM_CMD=()
 ZEEKSTD_ARGS=(--force --compression-level 10)
 
 usage() {
   cat <<'EOF'
 Usage:
-  convert-7z-to-tarzst.sh [options] ARCHIVE.7z
+  convert-to-tarzst.sh [options] ARCHIVE
 
 Description:
-  Extracts the provided *.7z archive into a temporary directory, repacks its
-  contents into an uncompressed tar stream, and compresses that stream with the
-  zeekstd CLI to produce a seekable .tar.zst file.
+  - For *.7z inputs: extracts the archive into a temporary directory, repacks
+    its contents into an uncompressed tar stream, and compresses that stream
+    with zeekstd to produce a seekable .tar.zst file.
+  - For *.tar.gz/*.tgz, *.tar.xz/*.txz, or *.tar.bz2/*.tbz* inputs: streams the
+    tarball through the appropriate decompressor directly into zeekstd without
+    creating a temporary workspace.
 
 Options:
   -o, --output FILE       Target .tar.zst path (default: ARCHIVE basename + .tar.zst)
       --zeekstd PATH      Override zeekstd binary (default: ${HOME}/.cargo/bin/zeekstd)
       --zeekstd-arg ARG   Additional argument to pass to zeekstd (repeatable)
       --temp-dir DIR      Create the temporary extraction directory under DIR
-      --sha256            Emit SHA-256 manifest (defaults to ARCHIVE basename + .sha256)
+                           (only applies to .7z inputs)
+      --sha256            Emit SHA-256 manifest (only for .7z inputs; defaults
+                           to ARCHIVE basename + .sha256)
       --sha256-file FILE  Emit SHA-256 manifest to FILE
       --sha256-append     Append to the SHA-256 file instead of truncating
   -f, --force             Overwrite the output file if it already exists
       --remove-source     Delete the original .7z archive after a successful conversion
   -q, --quiet             Suppress progress logs
-  -k, --keep-temp         Keep the temporary extraction directory (printed on success)
+  -k, --keep-temp         Keep the temporary extraction directory (printed on success;
+                           only useful for .7z inputs)
   -h, --help              Show this help message
 EOF
 }
@@ -56,9 +65,19 @@ default_basename_path() {
   local archive="$1" dir base
   dir="$(dirname -- "$archive")"
   base="$(basename -- "$archive")"
-  if [[ "$base" == *.* ]]; then
-    base="${base%.*}"
-  fi
+  local lowered="${base,,}"
+  case "$lowered" in
+    *.tar.gz|*.tar.xz|*.tar.bz2)
+      base="${base%.*}"
+      base="${base%.*}"
+      ;;
+    *.tgz|*.txz|*.tbz|*.tbz2)
+      base="${base%.*}"
+      ;;
+    *.7z)
+      base="${base%.*}"
+      ;;
+  esac
   printf '%s/%s\n' "$dir" "$base"
 }
 
@@ -95,6 +114,65 @@ write_sha256_manifest() {
 
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "Required tool '$1' is not on PATH."
+}
+
+detect_archive_type() {
+  local archive="$1" lowered="${archive,,}"
+  case "$lowered" in
+    *.7z)
+      printf '7z'
+      ;;
+    *.tar.gz|*.tgz)
+      printf 'tar.gz'
+      ;;
+    *.tar.xz|*.txz)
+      printf 'tar.xz'
+      ;;
+    *.tar.bz2|*.tbz|*.tbz2)
+      printf 'tar.bz2'
+      ;;
+    *)
+      die "Unsupported archive extension for $archive (supported: .7z, .tar.gz/.tgz, .tar.xz/.txz, .tar.bz2/.tbz/.tbz2)"
+      ;;
+  esac
+}
+
+setup_stream_input() {
+  case "$ARCHIVE_TYPE" in
+    tar.gz)
+      if command -v pigz >/dev/null 2>&1; then
+        INPUT_STREAM_CMD=(pigz -dc -- "$ARCHIVE")
+        INPUT_STREAM_DESC="pigz -dc"
+      else
+        require_cmd gzip
+        INPUT_STREAM_CMD=(gzip -dc -- "$ARCHIVE")
+        INPUT_STREAM_DESC="gzip -dc"
+      fi
+      ;;
+    tar.xz)
+      if command -v pixz >/dev/null 2>&1; then
+        INPUT_STREAM_CMD=(pixz -dc -- "$ARCHIVE")
+        INPUT_STREAM_DESC="pixz -dc"
+      else
+        require_cmd xz
+        INPUT_STREAM_CMD=(xz -dc -- "$ARCHIVE")
+        INPUT_STREAM_DESC="xz -dc"
+      fi
+      ;;
+    tar.bz2)
+      if command -v pbzip2 >/dev/null 2>&1; then
+        INPUT_STREAM_CMD=(pbzip2 -dc -- "$ARCHIVE")
+        INPUT_STREAM_DESC="pbzip2 -dc"
+      else
+        require_cmd bzip2
+        INPUT_STREAM_CMD=(bzip2 -dc -- "$ARCHIVE")
+        INPUT_STREAM_DESC="bzip2 -dc"
+      fi
+      ;;
+    *)
+      die "Streaming conversion is not supported for archive type '$ARCHIVE_TYPE'"
+      ;;
+  esac
 }
 
 WORKDIR=""
@@ -201,18 +279,26 @@ if [[ -e "$OUTPUT" && "$FORCE" -ne 1 ]]; then
   die "Output already exists: $OUTPUT (use --force to overwrite)"
 fi
 
+ARCHIVE_TYPE="$(detect_archive_type "$ARCHIVE")"
+
+if [[ "$SHA256_ENABLED" -eq 1 && "$ARCHIVE_TYPE" != "7z" ]]; then
+  die "--sha256 is only supported for .7z inputs."
+fi
+
 if [[ "$SHA256_ENABLED" -eq 1 && -z "$SHA256_FILE" ]]; then
   SHA256_FILE="$(default_sha256_path "$ARCHIVE")"
 fi
 
-if [[ "$SHA256_ENABLED" -eq 1 ]]; then
-  prepare_sha256_file "$SHA256_FILE" "$SHA256_APPEND"
+if [[ "$ARCHIVE_TYPE" == "7z" ]]; then
+  require_cmd 7z
+  require_cmd tar
+else
+  setup_stream_input
 fi
 
-require_cmd 7z
-require_cmd tar
 if [[ "$SHA256_ENABLED" -eq 1 ]]; then
   require_cmd sha256sum
+  prepare_sha256_file "$SHA256_FILE" "$SHA256_APPEND"
 fi
 
 if [[ -n "$TEMP_PARENT" ]]; then
@@ -231,17 +317,19 @@ if [[ ! -x "$ZEEKSTD_BIN" ]]; then
   fi
 fi
 
-template="convert-7z-to-tarzst.XXXXXX"
-if [[ -n "$TEMP_PARENT" ]]; then
-  WORKDIR="$(mktemp -d -p "$TEMP_PARENT" "$template")" || die "Failed to create temporary directory under $TEMP_PARENT"
-else
-  WORKDIR="$(mktemp -d)" || die "Failed to create temporary directory"
-fi
-log "Extracting $ARCHIVE into $WORKDIR ..."
-if [[ "$QUIET" -eq 1 ]]; then
-  7z x -y -bso0 -bsp0 -o"$WORKDIR" -- "$ARCHIVE" >/dev/null
-else
-  7z x -y -bso0 -bsp1 -o"$WORKDIR" -- "$ARCHIVE"
+if [[ "$ARCHIVE_TYPE" == "7z" ]]; then
+  template="convert-to-tarzst.XXXXXX"
+  if [[ -n "$TEMP_PARENT" ]]; then
+    WORKDIR="$(mktemp -d -p "$TEMP_PARENT" "$template")" || die "Failed to create temporary directory under $TEMP_PARENT"
+  else
+    WORKDIR="$(mktemp -d)" || die "Failed to create temporary directory"
+  fi
+  log "Extracting $ARCHIVE into $WORKDIR ..."
+  if [[ "$QUIET" -eq 1 ]]; then
+    7z x -y -bso0 -bsp0 -o"$WORKDIR" -- "$ARCHIVE" >/dev/null
+  else
+    7z x -y -bso0 -bsp1 -o"$WORKDIR" -- "$ARCHIVE"
+  fi
 fi
 
 mkdir -p -- "$(dirname -- "$OUTPUT")"
@@ -256,8 +344,15 @@ tar_stream() {
 }
 
 log "Creating tar.zst at $OUTPUT ..."
-if ! tar_stream | "$ZEEKSTD_BIN" "${ZEEKSTD_ARGS[@]}" -o "$TMP_OUTPUT"; then
-  die "zeekstd compression failed"
+if [[ "$ARCHIVE_TYPE" == "7z" ]]; then
+  if ! tar_stream | "$ZEEKSTD_BIN" "${ZEEKSTD_ARGS[@]}" -o "$TMP_OUTPUT"; then
+    die "zeekstd compression failed"
+  fi
+else
+  log "Streaming $ARCHIVE via $INPUT_STREAM_DESC ..."
+  if ! "${INPUT_STREAM_CMD[@]}" | "$ZEEKSTD_BIN" "${ZEEKSTD_ARGS[@]}" -o "$TMP_OUTPUT"; then
+    die "zeekstd compression failed"
+  fi
 fi
 
 if [[ -e "$OUTPUT" && "$FORCE" -eq 1 ]]; then

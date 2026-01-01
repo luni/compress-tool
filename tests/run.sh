@@ -693,8 +693,8 @@ EOF
   fi
 }
 
-run_convert_7z_to_tarzst_test() {
-  log "Running convert-7z-to-tarzst.sh test"
+run_convert_to_tarzst_test() {
+  log "Verifying convert-to-tarzst.sh handles SHA256 manifests"
 
   local tmpdir
   tmpdir="$(mktemp -d)"
@@ -734,13 +734,13 @@ run_convert_7z_to_tarzst_test() {
   local output_tar_zst="$tmpdir/output.tar.zst"
   local manifest="$tmpdir/output.sha256"
 
-  local convert_script="$REPO_ROOT/convert-7z-to-tarzst.sh"
-  if ! ZEEKSTD_BIN="$ZEEKSTD_BIN_PATH" "$convert_script" \
+  local script="$REPO_ROOT/convert-to-tarzst.sh"
+  if ! ZEEKSTD_BIN="$ZEEKSTD_BIN_PATH" "$script" \
       --output "$output_tar_zst" \
       --sha256-file "$manifest" \
       --remove-source \
       "$archive" >/dev/null; then
-    echo "convert-7z-to-tarzst.sh failed to convert sample archive" >&2
+    echo "convert-to-tarzst.sh failed to convert sample archive" >&2
     return 1
   fi
 
@@ -755,7 +755,7 @@ run_convert_7z_to_tarzst_test() {
   fi
 
   if [[ ! -f "$manifest" ]]; then
-    echo "SHA-256 manifest not created" >&2
+    echo "SHA256 manifest not created" >&2
     return 1
   fi
 
@@ -784,6 +784,18 @@ run_convert_7z_to_tarzst_test() {
       return 1
     fi
   done
+
+  for tarball in "$gz_tar" "$xz_tar" "$bz2_tar"; do
+    local converted="${tarball%.tar.*}.tar.zst"
+    if ! "$script" "$tarball" >/dev/null; then
+      echo "convert-to-tarzst.sh failed on $tarball" >&2
+      return 1
+    fi
+    if [[ ! -f "$converted" ]]; then
+      echo "convert-to-tarzst.sh did not create $converted" >&2
+      return 1
+    fi
+  done
 }
 
 main() {
@@ -792,7 +804,7 @@ main() {
     "run_decompress_test::Decompression pipelines"
     "run_analyze_archive_test::Archive analyzer"
     "run_find_duplicate_sha256_test::Duplicate detector"
-    "run_convert_7z_to_tarzst_test::7z ➜ seekable tar.zst converter"
+    "run_convert_to_tarzst_test::7z ➜ seekable tar.zst converter"
   )
 
   printf 'Test plan (%d total):\n' "${#tests[@]}"
