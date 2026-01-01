@@ -71,7 +71,8 @@ See `compress.sh` for all advanced tweaks (compression levels, quiet mode, etc.)
 
 ### File matching
 
-By default the script targets `*.tar`, `*.sql`, `*.txt`, `*.csv`, and `*.ibd`.
+By default the script targets `*.tar`, `*.sql`, `*.txt`, `*.csv`, `*.ibd`,
+`*.xlsx`, and `*.docx`.
 Use `--ext EXT` (repeatable, accepts comma-separated values) to provide your own
 extension list. The first `--ext` invocation replaces the defaults; subsequent
 ones append.
