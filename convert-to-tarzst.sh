@@ -31,6 +31,9 @@ Description:
   - For *.tar.gz/*.tgz, *.tar.xz/*.txz, or *.tar.bz2/*.tbz* inputs: streams the
     tarball through the appropriate decompressor directly into zeekstd without
     creating a temporary workspace.
+  - For *.zip inputs: extracts the archive into a temporary directory, repacks
+    its contents into an uncompressed tar stream, and compresses that stream
+    with zeekstd to produce a seekable .tar.zst file.
 
 Options:
   -o, --output FILE       Target .tar.zst path (default: ARCHIVE basename + .tar.zst)
@@ -38,15 +41,14 @@ Options:
       --zeekstd-arg ARG   Additional argument to pass to zeekstd (repeatable)
       --temp-dir DIR      Create the temporary extraction directory under DIR
                            (only applies to .7z inputs)
-      --sha256            Emit SHA-256 manifest (only for .7z inputs; defaults
-                           to ARCHIVE basename + .sha256)
+      --sha256            Emit SHA-256 manifest (defaults to ARCHIVE basename + .sha256)
       --sha256-file FILE  Emit SHA-256 manifest to FILE
       --sha256-append     Append to the SHA-256 file instead of truncating
   -f, --force             Overwrite the output file if it already exists
-      --remove-source     Delete the original .7z archive after a successful conversion
+      --remove-source     Delete the original archive after a successful conversion
   -q, --quiet             Suppress progress logs
   -k, --keep-temp         Keep the temporary extraction directory (printed on success;
-                           only useful for .7z inputs)
+                           only useful for .7z and .zip inputs)
   -h, --help              Show this help message
 EOF
 }
@@ -74,7 +76,7 @@ default_basename_path() {
     *.tgz|*.txz|*.tbz|*.tbz2)
       base="${base%.*}"
       ;;
-    *.7z)
+    *.7z|*.zip)
       base="${base%.*}"
       ;;
   esac
@@ -112,12 +114,124 @@ write_sha256_manifest() {
   done < <(LC_ALL=C find "$root" -type f -print0 | LC_ALL=C sort -z)
 }
 
+detect_tar_compression() {
+  local archive="$1"
+  local lowered="${archive,,}"
+  case "$lowered" in
+    *.tar.gz|*.tgz) echo "gz" ;;
+    *.tar.bz2|*.tbz|*.tbz2) echo "bz2" ;;
+    *.tar.xz|*.txz) echo "xz" ;;
+    *) echo "none" ;;
+  esac
+}
+
+tar_list_entries() {
+  local archive="$1" dest="$2" compression="$3"
+
+  run_tar_list() {
+    case "$compression" in
+      gz)
+        require_cmd pigz
+        pigz -dc -- "$archive" | tar -tf -
+        ;;
+      bz2)
+        require_cmd pbzip2
+        pbzip2 -dc -- "$archive" | tar -tf -
+        ;;
+      xz)
+        require_cmd pixz
+        pixz -dc -- "$archive" | tar -tf -
+        ;;
+      none) tar -tf "$archive" ;;
+    esac
+  }
+
+  if ! run_tar_list >"$dest" 2>&1; then
+    cat "$dest" >&2
+    rm -f "$dest"
+    die "Failed to list tar entries for $archive"
+  fi
+}
+
+write_sha256_manifest_tar() {
+  local archive="$1" dest="$2" compression="$3"
+  [[ -z "$dest" ]] && return 0
+
+  local tmp_entries tmp_command
+  tmp_entries="$(mktemp)"
+  tmp_command="$(mktemp)"
+
+  tar_list_entries "$archive" "$tmp_entries" "$compression"
+
+  # Filter out directories
+  local tmp_files
+  tmp_files="$(mktemp)"
+  while IFS= read -r entry; do
+    [[ -z "$entry" ]] && continue
+    [[ "$entry" == */ ]] && continue
+    printf '%s\0' "$entry"
+  done <"$tmp_entries" >"$tmp_files"
+  rm -f "$tmp_entries"
+
+  cat >"$tmp_command" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+f="${TAR_FILENAME:-}"
+if [[ -z "$f" || "$f" == */ ]]; then
+  exit 0
+fi
+hash="$(sha256sum | awk '{print $1}')"
+if [[ -n "${TMP_MANIFEST:-}" ]]; then
+  printf '%s  %s\n' "$hash" "$f" | tee -a "$TMP_MANIFEST"
+else
+  printf '%s  %s\n' "$hash" "$f"
+fi
+EOF
+  chmod +x "$tmp_command"
+
+  local tmp_manifest
+  tmp_manifest="$(mktemp)"
+  export TMP_MANIFEST="$tmp_manifest"
+
+  case "$compression" in
+    gz)
+      if command -v pigz >/dev/null 2>&1; then
+        pigz -dc -- "$archive" | tar --null --files-from="$tmp_files" --to-command="$tmp_command" -xf - 2>/dev/null || true
+      else
+        gzip -dc -- "$archive" | tar --null --files-from="$tmp_files" --to-command="$tmp_command" -xf - 2>/dev/null || true
+      fi
+      ;;
+    bz2)
+      if command -v pbzip2 >/dev/null 2>&1; then
+        pbzip2 -dc -- "$archive" | tar --null --files-from="$tmp_files" --to-command="$tmp_command" -xf - 2>/dev/null || true
+      else
+        bzip2 -dc -- "$archive" | tar --null --files-from="$tmp_files" --to-command="$tmp_command" -xf - 2>/dev/null || true
+      fi
+      ;;
+    xz)
+      if command -v pixz >/dev/null 2>&1; then
+        pixz -dc -- "$archive" | tar --null --files-from="$tmp_files" --to-command="$tmp_command" -xf - 2>/dev/null || true
+      else
+        xz -dc -- "$archive" | tar --null --files-from="$tmp_files" --to-command="$tmp_command" -xf - 2>/dev/null || true
+      fi
+      ;;
+    none)
+      tar --null --files-from="$tmp_files" --to-command="$tmp_command" -xf "$archive" 2>/dev/null || true
+      ;;
+  esac
+
+  LC_ALL=C sort -t $'\t' -k2,2 "$tmp_manifest" | awk '{printf "%s  %s\n",$1,$2}' >>"$dest"
+
+  rm -f "$tmp_files" "$tmp_command" "$tmp_manifest"
+}
+
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "Required tool '$1' is not on PATH."
 }
 
 detect_archive_type() {
-  local archive="$1" lowered="${archive,,}"
+  local archive="$1"
+  local lowered="${archive,,}"
   case "$lowered" in
     *.7z)
       printf '7z'
@@ -131,8 +245,11 @@ detect_archive_type() {
     *.tar.bz2|*.tbz|*.tbz2)
       printf 'tar.bz2'
       ;;
+    *.zip)
+      printf 'zip'
+      ;;
     *)
-      die "Unsupported archive extension for $archive (supported: .7z, .tar.gz/.tgz, .tar.xz/.txz, .tar.bz2/.tbz/.tbz2)"
+      die "Unsupported archive extension for $archive (supported: .7z, .tar.gz/.tgz, .tar.xz/.txz, .tar.bz2/.tbz/.tbz2, .zip)"
       ;;
   esac
 }
@@ -140,34 +257,19 @@ detect_archive_type() {
 setup_stream_input() {
   case "$ARCHIVE_TYPE" in
     tar.gz)
-      if command -v pigz >/dev/null 2>&1; then
-        INPUT_STREAM_CMD=(pigz -dc -- "$ARCHIVE")
-        INPUT_STREAM_DESC="pigz -dc"
-      else
-        require_cmd gzip
-        INPUT_STREAM_CMD=(gzip -dc -- "$ARCHIVE")
-        INPUT_STREAM_DESC="gzip -dc"
-      fi
+      require_cmd pigz
+      INPUT_STREAM_CMD=(pigz -dc -- "$ARCHIVE")
+      INPUT_STREAM_DESC="pigz -dc"
       ;;
     tar.xz)
-      if command -v pixz >/dev/null 2>&1; then
-        INPUT_STREAM_CMD=(pixz -dc -- "$ARCHIVE")
-        INPUT_STREAM_DESC="pixz -dc"
-      else
-        require_cmd xz
-        INPUT_STREAM_CMD=(xz -dc -- "$ARCHIVE")
-        INPUT_STREAM_DESC="xz -dc"
-      fi
+      require_cmd pixz
+      INPUT_STREAM_CMD=(pixz -dc -- "$ARCHIVE")
+      INPUT_STREAM_DESC="pixz -dc"
       ;;
     tar.bz2)
-      if command -v pbzip2 >/dev/null 2>&1; then
-        INPUT_STREAM_CMD=(pbzip2 -dc -- "$ARCHIVE")
-        INPUT_STREAM_DESC="pbzip2 -dc"
-      else
-        require_cmd bzip2
-        INPUT_STREAM_CMD=(bzip2 -dc -- "$ARCHIVE")
-        INPUT_STREAM_DESC="bzip2 -dc"
-      fi
+      require_cmd pbzip2
+      INPUT_STREAM_CMD=(pbzip2 -dc -- "$ARCHIVE")
+      INPUT_STREAM_DESC="pbzip2 -dc"
       ;;
     *)
       die "Streaming conversion is not supported for archive type '$ARCHIVE_TYPE'"
@@ -281,16 +383,15 @@ fi
 
 ARCHIVE_TYPE="$(detect_archive_type "$ARCHIVE")"
 
-if [[ "$SHA256_ENABLED" -eq 1 && "$ARCHIVE_TYPE" != "7z" ]]; then
-  die "--sha256 is only supported for .7z inputs."
-fi
-
 if [[ "$SHA256_ENABLED" -eq 1 && -z "$SHA256_FILE" ]]; then
   SHA256_FILE="$(default_sha256_path "$ARCHIVE")"
 fi
 
 if [[ "$ARCHIVE_TYPE" == "7z" ]]; then
   require_cmd 7z
+  require_cmd tar
+elif [[ "$ARCHIVE_TYPE" == "zip" ]]; then
+  require_cmd unzip
   require_cmd tar
 else
   setup_stream_input
@@ -330,6 +431,19 @@ if [[ "$ARCHIVE_TYPE" == "7z" ]]; then
   else
     7z x -y -bso0 -bsp1 -o"$WORKDIR" -- "$ARCHIVE"
   fi
+elif [[ "$ARCHIVE_TYPE" == "zip" ]]; then
+  template="convert-to-tarzst.XXXXXX"
+  if [[ -n "$TEMP_PARENT" ]]; then
+    WORKDIR="$(mktemp -d -p "$TEMP_PARENT" "$template")" || die "Failed to create temporary directory under $TEMP_PARENT"
+  else
+    WORKDIR="$(mktemp -d)" || die "Failed to create temporary directory"
+  fi
+  log "Extracting $ARCHIVE into $WORKDIR ..."
+  if [[ "$QUIET" -eq 1 ]]; then
+    unzip -q -d "$WORKDIR" -- "$ARCHIVE" >/dev/null
+  else
+    unzip -d "$WORKDIR" -- "$ARCHIVE"
+  fi
 fi
 
 mkdir -p -- "$(dirname -- "$OUTPUT")"
@@ -343,8 +457,18 @@ tar_stream() {
   fi
 }
 
+if [[ "$SHA256_ENABLED" -eq 1 ]]; then
+  case "$ARCHIVE_TYPE" in
+    tar.gz|tar.xz|tar.bz2)
+      TAR_COMPRESSION="$(detect_tar_compression "$ARCHIVE")"
+      log "Computing SHA-256 manifest for tar archive..."
+      write_sha256_manifest_tar "$ARCHIVE" "$SHA256_FILE" "$TAR_COMPRESSION"
+      ;;
+  esac
+fi
+
 log "Creating tar.zst at $OUTPUT ..."
-if [[ "$ARCHIVE_TYPE" == "7z" ]]; then
+if [[ "$ARCHIVE_TYPE" == "7z" || "$ARCHIVE_TYPE" == "zip" ]]; then
   if ! tar_stream | "$ZEEKSTD_BIN" "${ZEEKSTD_ARGS[@]}" -o "$TMP_OUTPUT"; then
     die "zeekstd compression failed"
   fi
@@ -371,7 +495,11 @@ if [[ "$REMOVE_SOURCE" -eq 1 ]]; then
 fi
 
 if [[ "$SHA256_ENABLED" -eq 1 ]]; then
-  write_sha256_manifest "$WORKDIR" "$SHA256_FILE"
+  case "$ARCHIVE_TYPE" in
+    7z|zip)
+      write_sha256_manifest "$WORKDIR" "$SHA256_FILE"
+      ;;
+  esac
 fi
 
 log "Conversion complete: $OUTPUT"
