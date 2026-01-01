@@ -475,6 +475,62 @@ run_analyze_archive_test() {
   run_analyze_archive_case tar
   run_analyze_archive_case 7z
   run_analyze_archive_case zip
+  run_analyze_archive_invalid_cases
+}
+
+run_analyze_archive_invalid_cases() {
+  log "Running analyze-archive.sh invalid archive tests"
+
+  local tmpdir
+  tmpdir="$(mktemp -d)"
+  TMP_DIRS+=("$tmpdir")
+
+  local -a types=("7z" "tar" "zip")
+
+  for archive_type in "${types[@]}"; do
+    local invalid expected_msg
+    case "$archive_type" in
+      7z)
+        invalid="$tmpdir/bad.7z"
+        expected_msg="Failed to list entries for $invalid"
+        ;;
+      tar)
+        invalid="$tmpdir/bad.tar"
+        expected_msg="Failed to list tar entries for $invalid"
+        ;;
+      zip)
+        invalid="$tmpdir/bad.zip"
+        expected_msg="Failed to list zip entries for $invalid"
+        ;;
+      *)
+        echo "Unknown invalid archive type: $archive_type" >&2
+        return 1
+        ;;
+    esac
+
+    printf 'invalid archive payload (%s)\n' "$archive_type" >"$invalid"
+    local manifest="${invalid%.*}.sha256"
+    local output_file="$tmpdir/output-${archive_type}.log"
+
+    if "$REPO_ROOT/analyze-archive.sh" "$invalid" >"$output_file" 2>&1; then
+      echo "analyze-archive.sh unexpectedly succeeded on invalid $archive_type archive" >&2
+      cat "$output_file" >&2
+      return 1
+    fi
+
+    local output
+    output="$(cat "$output_file")"
+    if [[ "$output" != *"$expected_msg"* ]]; then
+      echo "Expected failure message missing for invalid $archive_type archive" >&2
+      echo "$output" >&2
+      return 1
+    fi
+
+    if [[ -e "$manifest" ]]; then
+      echo "Manifest should not be created when analyze-archive.sh fails ($archive_type)" >&2
+      return 1
+    fi
+  done
 }
 
 run_find_duplicate_sha256_test() {

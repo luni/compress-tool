@@ -149,6 +149,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Create/truncate checksum files up front (if requested)
+if [[ -n "$SHA256_FILE" && "$SHA256_APPEND" -eq 1 && -e "$SHA256_FILE" && ! -s "$SHA256_FILE" ]]; then
+  log "Detected empty SHA-256 manifest; overwriting $SHA256_FILE"
+  SHA256_APPEND=0
+fi
 prepare_checksum_file "$SHA1_FILE" "$SHA1_APPEND"
 prepare_checksum_file "$SHA256_FILE" "$SHA256_APPEND"
 

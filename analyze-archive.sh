@@ -119,10 +119,21 @@ process_7z_entries_single_pass() {
 
 collect_7z_entries_with_sizes() {
   local archive="$1"
-  local line path attrs size started=0
+  local line path="" attrs="" size="" started=0
+  local listing_tmp listing_output
 
   SEVENZ_PATHS=()
   SEVENZ_SIZES=()
+
+  listing_tmp="$(mktemp)"
+  if ! "$SEVENZ_BIN" l -slt -- "$archive" >"$listing_tmp" 2>&1; then
+    listing_output="$(cat "$listing_tmp")"
+    rm -f "$listing_tmp"
+    if [[ -n "$listing_output" ]]; then
+      printf '%s\n' "$listing_output" >&2
+    fi
+    die "Failed to list entries for $archive"
+  fi
 
   flush_entry() {
     if [[ -n "$path" && "$attrs" != *D* ]]; then
@@ -162,8 +173,9 @@ collect_7z_entries_with_sizes() {
     elif [[ "$line" == Size\ =\ * ]]; then
       size="${line#Size = }"
     fi
-  done < <("$SEVENZ_BIN" l -slt -- "$archive")
+  done <"$listing_tmp"
 
+  rm -f "$listing_tmp"
   flush_entry
 }
 
@@ -196,14 +208,23 @@ require_tar_filter_tool() {
 }
 
 tar_list_entries() {
-  local archive="$1"
-  case "$TAR_COMPRESSION" in
-    gz) pigz -dc -- "$archive" | tar -tf - ;;
-    bz2) pbzip2 -dc -- "$archive" | tar -tf - ;;
-    xz) pixz -d -c -- "$archive" | tar -tf - ;;
-    zst) pzstd -d -q -c -- "$archive" | tar -tf - ;;
-    none) tar -tf "$archive" ;;
-  esac
+  local archive="$1" dest="$2"
+
+  run_tar_list() {
+    case "$TAR_COMPRESSION" in
+      gz) pigz -dc -- "$archive" | tar -tf - ;;
+      bz2) pbzip2 -dc -- "$archive" | tar -tf - ;;
+      xz) pixz -d -c -- "$archive" | tar -tf - ;;
+      zst) pzstd -d -q -c -- "$archive" | tar -tf - ;;
+      none) tar -tf "$archive" ;;
+    esac
+  }
+
+  if ! run_tar_list >"$dest" 2>&1; then
+    cat "$dest" >&2
+    rm -f "$dest"
+    die "Failed to list tar entries for $archive"
+  fi
 }
 
 tar_extract_entry() {
@@ -218,21 +239,33 @@ tar_extract_entry() {
 }
 
 list_archive_files_tar() {
-  local archive="$1" entry
+  local archive="$1" entry listing_tmp
+  listing_tmp="$(mktemp)"
+  tar_list_entries "$archive" "$listing_tmp"
   while IFS= read -r entry; do
     [[ -z "$entry" ]] && continue
     [[ "$entry" == */ ]] && continue
     printf '%s\0' "$entry"
-  done < <(tar_list_entries "$archive")
+  done <"$listing_tmp"
+  rm -f "$listing_tmp"
 }
 
 list_archive_files_zip() {
   local archive="$1" entry
+  local listing_tmp
+  listing_tmp="$(mktemp)"
+  if ! unzip -Z1 -- "$archive" >"$listing_tmp" 2>&1; then
+    cat "$listing_tmp" >&2
+    rm -f "$listing_tmp"
+    die "Failed to list zip entries for $archive"
+  fi
+
   while IFS= read -r entry; do
     [[ -z "$entry" ]] && continue
     [[ "$entry" == */ ]] && continue
     printf '%s\0' "$entry"
-  done < <(unzip -Z1 -- "$archive")
+  done <"$listing_tmp"
+  rm -f "$listing_tmp"
 }
 
 list_archive_files() {
@@ -380,10 +413,12 @@ files_processed=0
 if [[ "$ARCHIVE_TYPE" == "tar" ]]; then
   log "Using optimized tar processing"
   tmp_tar_entries="$(mktemp)"
+  if ! list_archive_files "$ARCHIVE" >"$tmp_tar_entries"; then
+    die "Failed to enumerate archive entries for $ARCHIVE"
+  fi
   while IFS= read -r -d '' entry; do
-    printf '%s\0' "$entry" >>"$tmp_tar_entries"
     files_processed=$((files_processed + 1))
-  done < <(list_archive_files "$ARCHIVE")
+  done <"$tmp_tar_entries"
 
   if [[ "$files_processed" -gt 0 ]]; then
     tmp_tar_command="$(mktemp)"
@@ -437,14 +472,22 @@ elif [[ "$ARCHIVE_TYPE" == "7z" ]]; then
   process_7z_entries_single_pass "$ARCHIVE"
 else
   # Fallback processing for archive types without streaming optimizations
+  tmp_entries_list="$(mktemp)"
+  if ! list_archive_files "$ARCHIVE" >"$tmp_entries_list"; then
+    rm -f "$tmp_entries_list"
+    die "Failed to enumerate archive entries for $ARCHIVE"
+  fi
+
   while IFS= read -r -d '' entry; do
     files_processed=$((files_processed + 1))
     log "processing: $entry"
     if ! hash="$(compute_sha256 "$ARCHIVE" "$entry")"; then
+      rm -f "$tmp_entries_list"
       die "Failed to compute SHA-256 for $entry"
     fi
     printf '%s\t%s\n' "$hash" "$entry" | tee -a "$tmp_manifest"
-  done < <(list_archive_files "$ARCHIVE")
+  done <"$tmp_entries_list"
+  rm -f "$tmp_entries_list"
 fi
 
 if [[ "$files_processed" -eq 0 ]]; then
