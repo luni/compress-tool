@@ -74,36 +74,28 @@ name_without_any_extension() {
 collect_related_basename_files() {
   local manifest="$1" archive="$2" out_var="$3"
   local -n __out_ref="$out_var"
-  local dir base file cand_name cand_last cand_first
-  declare -A manifest_keys=()
+  __out_ref=()
 
+  local base_no_sha="${manifest%.sha256}"
+  local dir
   dir="$(dirname -- "$manifest")"
-  base="$(basename -- "$manifest")"
-  if [[ "$base" == *.sha256 ]]; then
-    base="${base%.sha256}"
-  fi
+  local stem
+  stem="$(basename -- "$base_no_sha")"
 
-  for key in "$base" "$(name_without_last_extension "$base")" "$(name_without_any_extension "$base")"; do
-    [[ -z "$key" ]] && continue
-    manifest_keys["$key"]=1
-  done
-
-  shopt -s nullglob
-  for file in "$dir"/*; do
-    [[ -f "$file" ]] || continue
-    if [[ "$file" == "$manifest" || ( -n "${archive:-}" && "$file" == "$archive" ) ]]; then
+  declare -A seen=()
+  shopt -s nullglob dotglob
+  for candidate in "$base_no_sha".* "$dir/$stem"; do
+    [[ -f "$candidate" ]] || continue
+    if [[ "$candidate" == "$manifest" || ( -n "${archive:-}" && "$candidate" == "$archive" ) ]]; then
       continue
     fi
-    cand_name="$(basename -- "$file")"
-    cand_last="$(name_without_last_extension "$cand_name")"
-    cand_first="$(name_without_any_extension "$cand_name")"
-    if [[ -n "${manifest_keys["$cand_name"]:-}" || \
-          -n "${manifest_keys["$cand_last"]:-}" || \
-          -n "${manifest_keys["$cand_first"]:-}" ]]; then
-      __out_ref+=("$file")
-    fi
+    seen["$candidate"]=1
   done
-  shopt -u nullglob
+  shopt -u nullglob dotglob
+
+  for candidate in "${!seen[@]}"; do
+    __out_ref+=("$candidate")
+  done
 }
 
 gather_delete_targets() {
@@ -139,7 +131,7 @@ format_manifest_choice_label() {
   if (( ${#targets[@]} > 1 )); then
     local -a extras=("${targets[@]:1}")
     label+=" (also removes: "
-    label+=$(printf '%s, ' "${extras[@]}")
+    label+="$(printf '%s, ' "${extras[@]}")"
     label="${label%, }"
     label+=")"
   fi
@@ -428,7 +420,12 @@ if (( IDENTICAL_ONLY )); then
             continue
           fi
           for label in "${selected_labels[@]}"; do
-            manifests_to_delete+=("${label_to_manifest["$label"]}")
+            manifest="${label_to_manifest["$label"]-}"
+            if [[ -z "$manifest" ]]; then
+              printf 'warning: selection "%s" did not map to a manifest, skipping\n' "$label" >&2
+              continue
+            fi
+            manifests_to_delete+=("$manifest")
           done
           if (( ${#manifests_to_delete[@]} >= ${#manifests_in_group[@]} )); then
             printf 'Cannot delete every archive in a group; skipping this group.\n'

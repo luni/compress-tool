@@ -43,7 +43,7 @@ These tools must be on `$PATH`; the script will exit early when a required tool
 is missing. On Debian/Ubuntu systems you can install the full toolset with:
 
 ```
-sudo apt install bash coreutils pv xz-utils pixz parallel p7zip-full pigz pbzip2 pixz unzip zstd
+sudo apt install bash coreutils pv xz-utils pixz parallel p7zip-full pigz pbzip2 pixz unzip zstd fzf pigz
 ```
 
 ## Optional tools
