@@ -127,6 +127,21 @@ verify_checksum_file() {
   done
 }
 
+ensure_zeekstd() {
+  if command -v zeekstd >/dev/null 2>&1; then
+    ZEEKSTD_BIN_PATH="$(command -v zeekstd)"
+    return 0
+  fi
+
+  if [[ -x "${HOME}/.cargo/bin/zeekstd" ]]; then
+    ZEEKSTD_BIN_PATH="${HOME}/.cargo/bin/zeekstd"
+    return 0
+  fi
+
+  echo "Missing zeekstd binary. Please run ./install-zeekstd.sh first." >&2
+  exit 1
+}
+
 TMP_DIRS=()
 cleanup_tmpdirs() {
   for d in "${TMP_DIRS[@]}"; do
@@ -678,12 +693,106 @@ EOF
   fi
 }
 
+run_convert_7z_to_tarzst_test() {
+  log "Running convert-7z-to-tarzst.sh test"
+
+  local tmpdir
+  tmpdir="$(mktemp -d)"
+  TMP_DIRS+=("$tmpdir")
+
+  local input_dir="$tmpdir/input"
+  mkdir -p "$input_dir"
+
+  local rel_paths=(
+    "alpha.txt"
+    "nested/bravo.bin"
+    "spaces/charlie data.csv"
+  )
+  local sizes=(
+    128
+    512
+    1024
+  )
+
+  declare -A expected_hashes
+  for idx in "${!rel_paths[@]}"; do
+    local rel="${rel_paths[$idx]}"
+    local abs="$input_dir/$rel"
+    mkdir -p -- "$(dirname -- "$abs")"
+    generate_test_file "$abs" "${sizes[$idx]}" "Convert 7z payload $idx"
+    expected_hashes["$rel"]="$(sha256sum -- "$abs" | awk '{print $1}')"
+  done
+
+  local archive="$tmpdir/sample.7z"
+  (
+    cd "$input_dir"
+    7z a -bd -y "$archive" "${rel_paths[@]}" >/dev/null
+  )
+
+  ensure_zeekstd
+
+  local output_tar_zst="$tmpdir/output.tar.zst"
+  local manifest="$tmpdir/output.sha256"
+
+  local convert_script="$REPO_ROOT/convert-7z-to-tarzst.sh"
+  if ! ZEEKSTD_BIN="$ZEEKSTD_BIN_PATH" "$convert_script" \
+      --output "$output_tar_zst" \
+      --sha256 "$manifest" \
+      --remove-source \
+      "$archive" >/dev/null; then
+    echo "convert-7z-to-tarzst.sh failed to convert sample archive" >&2
+    return 1
+  fi
+
+  if [[ -e "$archive" ]]; then
+    echo "Source archive was not removed despite --remove-source" >&2
+    return 1
+  fi
+
+  if [[ ! -f "$output_tar_zst" ]]; then
+    echo "Output tar.zst not created" >&2
+    return 1
+  fi
+
+  if [[ ! -f "$manifest" ]]; then
+    echo "SHA-256 manifest not created" >&2
+    return 1
+  fi
+
+  local verify_args=()
+  for rel in "${rel_paths[@]}"; do
+    verify_args+=("$rel" "${expected_hashes[$rel]}")
+  done
+  verify_checksum_file "$manifest" "${verify_args[@]}"
+
+  local reconstructed_tar="$tmpdir/output.tar"
+  zstd -d -q -c -- "$output_tar_zst" >"$reconstructed_tar"
+
+  local extract_dir="$tmpdir/extracted"
+  mkdir -p "$extract_dir"
+  tar -C "$extract_dir" -xf "$reconstructed_tar"
+
+  for rel in "${rel_paths[@]}"; do
+    local original="$input_dir/$rel"
+    local restored="$extract_dir/$rel"
+    if [[ ! -f "$restored" ]]; then
+      echo "Missing file in reconstructed tar: $rel" >&2
+      return 1
+    fi
+    if ! cmp -s "$original" "$restored"; then
+      echo "Restored file mismatch for $rel" >&2
+      return 1
+    fi
+  done
+}
+
 main() {
   local tests=(
     "run_compress_test::Compression pipelines"
     "run_decompress_test::Decompression pipelines"
     "run_analyze_archive_test::Archive analyzer"
     "run_find_duplicate_sha256_test::Duplicate detector"
+    "run_convert_7z_to_tarzst_test::7z ➜ seekable tar.zst converter"
   )
 
   printf 'Test plan (%d total):\n' "${#tests[@]}"

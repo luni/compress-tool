@@ -11,6 +11,9 @@ sorted manifest with the SHA-256 of every file inside without touching disk.
 the same digest appears in multiple archives, can skip intra-manifest duplicates
 if you only care about cross-archive collisions, and can list archives whose
 entire manifest contents are identical to another.
+`convert-7z-to-tarzst.sh` rebuilds a `.7z` archive as a seekable `.tar.zst`
+payload using the [`zeekstd`](https://github.com/rorosen/zeekstd) CLI (install it
+locally via `./install-zeekstd.sh`).
 
 ## Required tools
 
@@ -120,6 +123,30 @@ Add `--identical-archives` when you only care about archives that contain the
 exact same set of files/hashes (i.e., perfect duplicates). In that mode the
 script groups manifests with identical contents and prints each group so you can
 remove redundant archives quickly.
+
+## Convert `.7z` to seekable `.tar.zst`
+
+1. Install the `zeekstd` CLI once (if you haven’t already):
+   ```
+   ./install-zeekstd.sh
+   ```
+2. Convert any `.7z` archive to a seekable `.tar.zst`:
+   ```
+   ./convert-7z-to-tarzst.sh backups.7z
+   ```
+
+The script extracts the source archive into a temporary directory, streams the
+contents through `tar`, and invokes `${HOME}/.cargo/bin/zeekstd --seekable` to
+produce `backups.tar.zst` alongside the original. Override the destination with
+`--output FILE`, keep the temporary extraction directory with `--keep-temp`, add
+extra encoder toggles using repeated `--zeekstd-arg ARG`, or overwrite existing
+outputs via `--force`. Use `--zeekstd /path/to/zeekstd` when the default
+location is not suitable, and `--temp-dir DIR` to force the extraction workspace
+to live on a specific filesystem (useful when `/tmp` is too small). The output
+inherits the original archive’s modification time, and `--remove-source` deletes
+the `.7z` once conversion succeeds. Add `--sha256 FILE` (optionally with
+`--sha256-append`) to emit a `sha256sum`-compatible entry for the freshly
+generated `.tar.zst`.
 
 ## Decompression
 

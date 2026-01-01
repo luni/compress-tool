@@ -25,5 +25,8 @@ jobs:
             xz-utils pixz zstd parallel pv python3
           sudo rm -rf /var/lib/apt/lists/*
 
+      - name: Install zeekstd CLI
+        run: ./install-zeekstd.sh
+
       - name: Run tests
         run: tests/run.sh
