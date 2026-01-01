@@ -126,8 +126,10 @@ EOF
   fi
 
   local redundant_archive="${charlie%.sha256}"
+  local redundant_extra="$manifest_dir/charlie.meta"
   cp -- "$bravo" "$charlie"
   : >"$redundant_archive"
+  : >"$redundant_extra"
   local delete_output
   if ! delete_output="$("$REPO_ROOT/find-duplicate-sha256.sh" \
       --identical-archives \
@@ -145,8 +147,8 @@ EOF
     return 1
   fi
 
-  if [[ -e "$charlie" || -e "$redundant_archive" ]]; then
-    echo "Redundant manifest/archive not removed under --delete-identical" >&2
+  if [[ -e "$charlie" || -e "$redundant_archive" || -e "$redundant_extra" ]]; then
+    echo "Redundant manifest/archive/related files not removed under --delete-identical" >&2
     return 1
   fi
 }

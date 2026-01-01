@@ -49,6 +49,133 @@ declare -A MANIFEST_ENTRY_COUNTS=()
 declare -A HASH_MANIFEST_SEEN=()
 declare -A HASH_UNIQUE_MANIFEST_COUNT=()
 
+name_without_last_extension() {
+  local path="$1" name trimmed
+  name="$(basename -- "$path")"
+  trimmed="${name%.*}"
+  if [[ "$trimmed" == "$name" || -z "$trimmed" ]]; then
+    printf '%s\n' "$name"
+  else
+    printf '%s\n' "$trimmed"
+  fi
+}
+
+name_without_any_extension() {
+  local path="$1" name trimmed
+  name="$(basename -- "$path")"
+  trimmed="${name%%.*}"
+  if [[ "$trimmed" == "$name" || -z "$trimmed" ]]; then
+    printf '%s\n' "$name"
+  else
+    printf '%s\n' "$trimmed"
+  fi
+}
+
+collect_related_basename_files() {
+  local manifest="$1" archive="$2" out_var="$3"
+  local -n __out_ref="$out_var"
+  local dir base file cand_name cand_last cand_first
+  declare -A manifest_keys=()
+
+  dir="$(dirname -- "$manifest")"
+  base="$(basename -- "$manifest")"
+  if [[ "$base" == *.sha256 ]]; then
+    base="${base%.sha256}"
+  fi
+
+  for key in "$base" "$(name_without_last_extension "$base")" "$(name_without_any_extension "$base")"; do
+    [[ -z "$key" ]] && continue
+    manifest_keys["$key"]=1
+  done
+
+  shopt -s nullglob
+  for file in "$dir"/*; do
+    [[ -f "$file" ]] || continue
+    if [[ "$file" == "$manifest" || ( -n "${archive:-}" && "$file" == "$archive" ) ]]; then
+      continue
+    fi
+    cand_name="$(basename -- "$file")"
+    cand_last="$(name_without_last_extension "$cand_name")"
+    cand_first="$(name_without_any_extension "$cand_name")"
+    if [[ -n "${manifest_keys["$cand_name"]:-}" || \
+          -n "${manifest_keys["$cand_last"]:-}" || \
+          -n "${manifest_keys["$cand_first"]:-}" ]]; then
+      __out_ref+=("$file")
+    fi
+  done
+  shopt -u nullglob
+}
+
+interactive_select_items() {
+  local result_var="$1"
+  local prompt="$2"
+  shift 2
+  local -n __result_ref="$result_var"
+  local -a options=("$@")
+  __result_ref=()
+
+  if (( ${#options[@]} == 0 )); then
+    return 1
+  fi
+
+  if command -v fzf >/dev/null 2>&1; then
+    local selection
+    if ! selection="$(
+      printf '%s\n' "${options[@]}" |
+        fzf --multi --prompt "$prompt" \
+            --header=$'TAB to toggle selections, ENTER to confirm, ESC to cancel'
+    )"; then
+      return 1
+    fi
+    if [[ -z "$selection" ]]; then
+      return 1
+    fi
+    mapfile -t __result_ref <<<"$selection"
+    return 0
+  fi
+
+  while true; do
+    printf '%s\n' "$prompt"
+    for idx in "${!options[@]}"; do
+      printf '  [%d] %s\n' "$((idx + 1))" "${options[idx]}"
+    done
+    printf 'Enter comma-separated numbers to delete (blank to cancel): '
+    local input
+    if ! IFS= read -r input; then
+      return 1
+    fi
+    input="${input//[[:space:]]/}"
+    if [[ -z "$input" ]]; then
+      return 1
+    fi
+    IFS=',' read -r -a selected_indices <<<"$input"
+    declare -a selected_unique=()
+    declare -A seen_index=()
+    invalid=0
+    for raw in "${selected_indices[@]}"; do
+      if [[ ! "$raw" =~ ^[0-9]+$ ]]; then
+        invalid=1
+        break
+      fi
+      local idx=$((raw - 1))
+      if (( idx < 0 || idx >= ${#options[@]} )); then
+        invalid=1
+        break
+      fi
+      if [[ -z "${seen_index[$idx]:-}" ]]; then
+        selected_unique+=("${options[idx]}")
+        seen_index[$idx]=1
+      fi
+    done
+    if (( invalid || ${#selected_unique[@]} == 0 )); then
+      printf 'Invalid selection. Please try again.\n'
+      continue
+    fi
+    __result_ref=("${selected_unique[@]}")
+    return 0
+  done
+}
+
 confirm_delete_targets() {
   local -a targets=("$@")
   if (( AUTO_CONFIRM )); then
@@ -90,6 +217,13 @@ delete_redundant_manifest() {
     if [[ -e "$archive" ]]; then
       targets+=("$archive")
     fi
+  else
+    archive=""
+  fi
+  local -a related_files=()
+  collect_related_basename_files "$manifest" "${archive:-}" related_files
+  if (( ${#related_files[@]} > 0 )); then
+    targets+=("${related_files[@]}")
   fi
 
   if [[ "${#targets[@]}" -eq 0 ]]; then
@@ -249,9 +383,23 @@ if (( IDENTICAL_ONLY )); then
         printf '  - %s\n' "$manifest"
       done
       if (( DELETE_IDENTICAL )); then
-        keeper="${manifests_in_group[0]}"
-        printf 'Deleting redundant archives from this group (keeping %s)...\n' "$keeper"
-        for manifest in "${manifests_in_group[@]:1}"; do
+        declare -a manifests_to_delete=()
+        if (( AUTO_CONFIRM )); then
+          manifests_to_delete=("${manifests_in_group[@]:1}")
+          printf 'Auto mode: keeping %s and deleting %d additional archive(s).\n' \
+            "${manifests_in_group[0]}" "${#manifests_to_delete[@]}"
+        else
+          printf $'Select redundant archives to delete. Leave at least one archive unchecked.\n'
+          if ! interactive_select_items manifests_to_delete "delete> " "${manifests_in_group[@]}"; then
+            printf 'No archives were selected for deletion; skipping this group.\n'
+            continue
+          fi
+          if (( ${#manifests_to_delete[@]} >= ${#manifests_in_group[@]} )); then
+            printf 'Cannot delete every archive in a group; skipping this group.\n'
+            continue
+          fi
+        fi
+        for manifest in "${manifests_to_delete[@]}"; do
           delete_redundant_manifest "$manifest"
         done
       fi

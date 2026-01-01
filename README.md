@@ -57,6 +57,7 @@ Install the tools below only if you intend to select the corresponding flags:
 | `pigz` | Required by `analyze-archive.sh` to stream `.tar.gz/.tgz` archives. |
 | `pbzip2` | Required by `analyze-archive.sh` to stream `.tar.bz2/.tbz` archives. |
 | `pixz` | Required by `analyze-archive.sh` to stream `.tar.xz/.txz/.tlz` archives when the default `pixz` binary is not already present. |
+| `fzf` | Optional fuzzy finder that powers the multi-select UI when removing identical archives in `find-duplicate-sha256.sh`; falls back to a simple numeric prompt if missing. |
 
 ## Usage
 
@@ -134,7 +135,11 @@ care about overlaps between archives).
 Add `--identical-archives` when you only care about archives that contain the
 exact same set of files/hashes (i.e., perfect duplicates). In that mode the
 script groups manifests with identical contents and prints each group so you can
-remove redundant archives quickly.
+remove redundant archives quickly. When paired with `--delete-identical`, the
+script prompts you to choose which manifests (and their matching archives +
+similarly named artifacts) to remove. If [`fzf`](https://github.com/junegunn/fzf)
+is installed you get a full-screen multi-select dialog; otherwise a numbered
+prompt is shown so you can still pick the targets interactively.
 
 ## Convert `.7z`/`.zip`/`.tar.*` to seekable `.tar.zst`
 
