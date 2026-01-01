@@ -106,6 +106,46 @@ collect_related_basename_files() {
   shopt -u nullglob
 }
 
+gather_delete_targets() {
+  local manifest="$1" out_var="$2"
+  local -n __out_ref="$out_var"
+  __out_ref=()
+
+  local archive=""
+  if [[ -e "$manifest" ]]; then
+    __out_ref+=("$manifest")
+  fi
+
+  if [[ "$manifest" == *.sha256 ]]; then
+    archive="${manifest%.sha256}"
+    if [[ -e "$archive" ]]; then
+      __out_ref+=("$archive")
+    fi
+  fi
+
+  local -a related_files=()
+  collect_related_basename_files "$manifest" "${archive:-}" related_files
+  if (( ${#related_files[@]} > 0 )); then
+    __out_ref+=("${related_files[@]}")
+  fi
+}
+
+format_manifest_choice_label() {
+  local manifest="$1"
+  local -a targets=()
+  gather_delete_targets "$manifest" targets
+
+  local label="$manifest"
+  if (( ${#targets[@]} > 1 )); then
+    local -a extras=("${targets[@]:1}")
+    label+=" (also removes: "
+    label+=$(printf '%s, ' "${extras[@]}")
+    label="${label%, }"
+    label+=")"
+  fi
+  printf '%s\n' "$label"
+}
+
 interactive_select_items() {
   local result_var="$1"
   local prompt="$2"
@@ -209,22 +249,7 @@ confirm_delete_targets() {
 delete_redundant_manifest() {
   local manifest="$1"
   local -a targets=()
-  if [[ -e "$manifest" ]]; then
-    targets+=("$manifest")
-  fi
-  if [[ "$manifest" == *.sha256 ]]; then
-    local archive="${manifest%.sha256}"
-    if [[ -e "$archive" ]]; then
-      targets+=("$archive")
-    fi
-  else
-    archive=""
-  fi
-  local -a related_files=()
-  collect_related_basename_files "$manifest" "${archive:-}" related_files
-  if (( ${#related_files[@]} > 0 )); then
-    targets+=("${related_files[@]}")
-  fi
+  gather_delete_targets "$manifest" targets
 
   if [[ "${#targets[@]}" -eq 0 ]]; then
     printf 'warning: nothing to delete for %s (files missing)\n' "$manifest" >&2
@@ -389,11 +414,22 @@ if (( IDENTICAL_ONLY )); then
           printf 'Auto mode: keeping %s and deleting %d additional archive(s).\n' \
             "${manifests_in_group[0]}" "${#manifests_to_delete[@]}"
         else
+          declare -a choice_labels=()
+          declare -A label_to_manifest=()
+          for manifest in "${manifests_in_group[@]}"; do
+            label="$(format_manifest_choice_label "$manifest")"
+            choice_labels+=("$label")
+            label_to_manifest["$label"]="$manifest"
+          done
           printf $'Select redundant archives to delete. Leave at least one archive unchecked.\n'
-          if ! interactive_select_items manifests_to_delete "delete> " "${manifests_in_group[@]}"; then
+          declare -a selected_labels=()
+          if ! interactive_select_items selected_labels "delete> " "${choice_labels[@]}"; then
             printf 'No archives were selected for deletion; skipping this group.\n'
             continue
           fi
+          for label in "${selected_labels[@]}"; do
+            manifests_to_delete+=("${label_to_manifest["$label"]}")
+          done
           if (( ${#manifests_to_delete[@]} >= ${#manifests_in_group[@]} )); then
             printf 'Cannot delete every archive in a group; skipping this group.\n'
             continue
