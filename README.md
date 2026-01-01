@@ -1,5 +1,4 @@
-# compress-tool
-small shell script to do some compression of files in bulk
+# Archiving Compression Tools
 
 `compress.sh` scans a directory for large text-ish artifacts (tar/sql/txt/csv/ibd) and
 compresses them using sensible defaults. Smaller files are processed in

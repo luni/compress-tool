@@ -84,6 +84,7 @@ require_cmd python3
 require_cmd zstd
 require_cmd sha1sum
 require_cmd sha256sum
+require_cmd tar
 
 verify_checksum_file() {
   local file="$1"; shift
@@ -311,9 +312,258 @@ run_decompress_test() {
   run_single_decompress_test true "remove-compressed"
 }
 
+run_analyze_archive_test() {
+  log "Running analyze-archive.sh test"
+
+  local tmpdir
+  tmpdir="$(mktemp -d)"
+  TMP_DIRS+=("$tmpdir")
+
+  local input_dir="$tmpdir/input"
+  local archive="$tmpdir/sample.tar"
+  mkdir -p "$input_dir"
+
+  local rel_paths=(
+    "alpha.txt"
+    "sub dir/bravo.bin"
+    "spaces/charlie data.csv"
+  )
+  local sizes=(
+    1024
+    2048
+    512
+  )
+
+  declare -A expected_hashes
+  for idx in "${!rel_paths[@]}"; do
+    local rel="${rel_paths[$idx]}"
+    local abs="$input_dir/$rel"
+    mkdir -p -- "$(dirname -- "$abs")"
+    generate_test_file "$abs" "${sizes[$idx]}" "Analyze archive payload $idx"
+    expected_hashes["$rel"]="$(sha256sum -- "$abs" | awk '{print $1}')"
+  done
+
+  tar -C "$input_dir" -cf "$archive" "${rel_paths[@]}"
+
+  local output
+  if ! output="$("$REPO_ROOT/analyze-archive.sh" "$archive" 2>&1)"; then
+    echo "analyze-archive.sh failed during manifest generation" >&2
+    echo "$output" >&2
+    return 1
+  fi
+
+  local manifest="$tmpdir/sample.sha256"
+  if [[ ! -f "$manifest" ]]; then
+    echo "Manifest not created at expected path: $manifest" >&2
+    return 1
+  fi
+
+  if [[ "$output" != *"Using optimized tar processing"* ]]; then
+    echo "analyze-archive.sh did not use optimized tar processing path" >&2
+    echo "$output" >&2
+    return 1
+  fi
+
+  if [[ "$output" != *"Processed ${#rel_paths[@]} file(s)."* ]]; then
+    echo "analyze-archive.sh reported unexpected processed count" >&2
+    echo "$output" >&2
+    return 1
+  fi
+
+  local previous_path=""
+  declare -A seen_paths=()
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -z "$line" ]] && continue
+    local hash="${line%%  *}"
+    local path="${line#*  }"
+    local normalized="${path#./}"
+
+    if [[ -n "$previous_path" && "$path" < "$previous_path" ]]; then
+      echo "Manifest entries are not sorted lexicographically" >&2
+      return 1
+    fi
+    previous_path="$path"
+
+    if [[ -z "${expected_hashes[$normalized]:-}" ]]; then
+      echo "Unexpected entry found in manifest: $path" >&2
+      return 1
+    fi
+
+    if [[ "${expected_hashes[$normalized]}" != "$hash" ]]; then
+      echo "Hash mismatch for $path" >&2
+      echo " expected: ${expected_hashes[$normalized]}" >&2
+      echo " actual  : $hash" >&2
+      return 1
+    fi
+
+    seen_paths["$normalized"]=1
+  done <"$manifest"
+
+  for rel in "${!expected_hashes[@]}"; do
+    if [[ -z "${seen_paths[$rel]:-}" ]]; then
+      echo "Missing manifest entry for $rel" >&2
+      return 1
+    fi
+  done
+
+  local manifest_backup="$tmpdir/sample.sha256.expected"
+  cp -- "$manifest" "$manifest_backup"
+
+  printf 'out-of-date manifest\n' >"$manifest"
+  local skip_output
+  if ! skip_output="$("$REPO_ROOT/analyze-archive.sh" "$archive" 2>&1)"; then
+    echo "analyze-archive.sh failed when manifest already existed" >&2
+    echo "$skip_output" >&2
+    return 1
+  fi
+
+  if [[ "$skip_output" != *"skip (manifest exists): $manifest"* ]]; then
+    echo "analyze-archive.sh did not report skip when manifest existed" >&2
+    echo "$skip_output" >&2
+    return 1
+  fi
+
+  if [[ "$(cat "$manifest")" != "out-of-date manifest" ]]; then
+    echo "Manifest was unexpectedly rewritten without --overwrite" >&2
+    return 1
+  fi
+
+  if ! "$REPO_ROOT/analyze-archive.sh" --overwrite "$archive" >/dev/null 2>&1; then
+    echo "analyze-archive.sh failed when invoked with --overwrite" >&2
+    return 1
+  fi
+
+  if ! cmp -s "$manifest" "$manifest_backup"; then
+    echo "Manifest contents did not refresh after --overwrite run" >&2
+    return 1
+  fi
+}
+
+run_find_duplicate_sha256_test() {
+  log "Running find-duplicate-sha256.sh test"
+
+  local tmpdir
+  tmpdir="$(mktemp -d)"
+  TMP_DIRS+=("$tmpdir")
+
+  local manifest_dir="$tmpdir/manifests"
+  mkdir -p "$manifest_dir"
+
+  local alpha="$manifest_dir/alpha.sha256"
+  local bravo="$manifest_dir/bravo.sha256"
+  local charlie="$manifest_dir/charlie.sha256"
+
+  local HASH_A="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  local HASH_DUP="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  local HASH_INTRA="cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  local HASH_UNIQUE="dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+
+  cat >"$alpha" <<EOF
+$HASH_A  alpha/path-one.txt
+$HASH_DUP  alpha/path-two.bin
+$HASH_INTRA  alpha/path-three.bin
+$HASH_INTRA  alpha/path-four.bin
+EOF
+
+  cat >"$bravo" <<EOF
+$HASH_DUP  bravo/shared.bin
+$HASH_UNIQUE  bravo/only.txt
+EOF
+
+  local output
+  if ! output="$("$REPO_ROOT/find-duplicate-sha256.sh" "$manifest_dir" 2>&1)"; then
+    echo "find-duplicate-sha256.sh failed (default invocation)" >&2
+    echo "$output" >&2
+    return 1
+  fi
+
+  if [[ "$output" != *"Scanned 2 manifest(s); 6 total entries (4 unique hashes). Skipped 0 line(s)."* ]]; then
+    echo "Unexpected scan summary for find-duplicate-sha256.sh" >&2
+    echo "$output" >&2
+    return 1
+  fi
+
+  if [[ "$output" != *"SHA256 $HASH_DUP (2 occurrences):"* ]]; then
+    echo "Cross-manifest duplicate hash was not reported" >&2
+    echo "$output" >&2
+    return 1
+  fi
+
+  if [[ "$output" != *"$alpha :: alpha/path-two.bin"* || "$output" != *"$bravo :: bravo/shared.bin"* ]]; then
+    echo "Locations for cross-manifest duplicate were missing" >&2
+    echo "$output" >&2
+    return 1
+  fi
+
+  if [[ "$output" != *"SHA256 $HASH_INTRA (2 occurrences):"* ]]; then
+    echo "Intra-manifest duplicate hash was not reported" >&2
+    echo "$output" >&2
+    return 1
+  fi
+
+  if [[ "$output" != *"$alpha :: alpha/path-three.bin"* || "$output" != *"$alpha :: alpha/path-four.bin"* ]]; then
+    echo "Intra-manifest duplicate locations missing from report" >&2
+    echo "$output" >&2
+    return 1
+  fi
+
+  local skip_output
+  if ! skip_output="$("$REPO_ROOT/find-duplicate-sha256.sh" --skip-intra-manifest "$manifest_dir" 2>&1)"; then
+    echo "find-duplicate-sha256.sh failed with --skip-intra-manifest" >&2
+    echo "$skip_output" >&2
+    return 1
+  fi
+
+  if [[ "$skip_output" == *"$HASH_INTRA"* ]]; then
+    echo "Intra-manifest duplicates were not filtered out" >&2
+    echo "$skip_output" >&2
+    return 1
+  fi
+
+  if [[ "$skip_output" != *"SHA256 $HASH_DUP (2 occurrences):"* ]]; then
+    echo "Cross-manifest duplicate missing when skipping intra-manifest entries" >&2
+    echo "$skip_output" >&2
+    return 1
+  fi
+
+  if [[ "$skip_output" != *"$alpha :: alpha/path-two.bin"* || "$skip_output" != *"$bravo :: bravo/shared.bin"* ]]; then
+    echo "Cross-manifest duplicate locations missing under --skip-intra-manifest" >&2
+    echo "$skip_output" >&2
+    return 1
+  fi
+
+  cp -- "$bravo" "$charlie"
+  local identical_output
+  if ! identical_output="$("$REPO_ROOT/find-duplicate-sha256.sh" --identical-archives "$manifest_dir" 2>&1)"; then
+    echo "find-duplicate-sha256.sh failed with --identical-archives" >&2
+    echo "$identical_output" >&2
+    return 1
+  fi
+
+  if [[ "$identical_output" != *"Scanned 3 manifest(s); 8 total entries (4 unique hashes). Skipped 0 line(s)."* ]]; then
+    echo "Unexpected scan summary under --identical-archives" >&2
+    echo "$identical_output" >&2
+    return 1
+  fi
+
+  if [[ "$identical_output" != *"Archives with identical contents (2 entries):"* ]]; then
+    echo "Identical archives report missing" >&2
+    echo "$identical_output" >&2
+    return 1
+  fi
+
+  if [[ "$identical_output" != *"$bravo"* || "$identical_output" != *"$charlie"* ]]; then
+    echo "Expected identical manifests were not listed together" >&2
+    echo "$identical_output" >&2
+    return 1
+  fi
+}
+
 main() {
   run_compress_test
   run_decompress_test
+  run_analyze_archive_test
+  run_find_duplicate_sha256_test
   log "All tests passed"
 }
 

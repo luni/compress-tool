@@ -137,7 +137,7 @@ tar_list_entries() {
     bz2) pbzip2 -dc -- "$archive" | tar -tf - ;;
     xz) pixz -d -c -- "$archive" | tar -tf - ;;
     zst) pzstd -d -q -c -- "$archive" | tar -tf - ;;
-    none) tar -tf -- "$archive" ;;
+    none) tar -tf "$archive" ;;
   esac
 }
 
@@ -148,7 +148,7 @@ tar_extract_entry() {
     bz2) pbzip2 -dc -- "$archive" | tar -xOf - -- "$entry" ;;
     xz) pixz -d -c -- "$archive" | tar -xOf - -- "$entry" ;;
     zst) pzstd -d -q -c -- "$archive" | tar -xOf - -- "$entry" ;;
-    none) tar -xOf -- "$archive" -- "$entry" ;;
+    none) tar -xOf "$archive" -- "$entry" ;;
   esac
 }
 
