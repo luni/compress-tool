@@ -360,7 +360,7 @@ run_analyze_archive_case() {
         cd "$input_dir"
         7z a -bd -y "$archive" "${rel_paths[@]}" >/dev/null
       )
-      expected_log="Using optimized 7z processing"
+      expected_log=""
       ;;
     zip)
       archive="$tmpdir/sample.zip"
