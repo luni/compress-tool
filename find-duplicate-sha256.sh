@@ -16,8 +16,12 @@ Description:
 Options:
   -A, --identical-archives   Only report archives whose manifests are identical
                              (same set of files + hashes). Requires sha256sum.
+  -D, --delete-identical     Delete redundant archives/manifests when using
+                             --identical-archives. Keeps the first archive in
+                             each identical group and removes the rest.
   -S, --skip-intra-manifest  Ignore hashes that appear more than once inside the
                              same manifest (only care about cross-archive dupes).
+  -y, --yes                  Automatically answer "yes" to deletion prompts.
   -h, --help                 Show this help message.
 EOF
 }
@@ -35,6 +39,8 @@ SEP=$'\x1F'
 GROUP_SEP=$'\x1E'
 IDENTICAL_ONLY=0
 SKIP_INTRA_MANIFEST=0
+DELETE_IDENTICAL=0
+AUTO_CONFIRM=0
 
 declare -A HASH_COUNTS=()
 declare -A HASH_LOCATIONS=()
@@ -42,6 +48,65 @@ declare -A SIGNATURE_MANIFESTS=()
 declare -A MANIFEST_ENTRY_COUNTS=()
 declare -A HASH_MANIFEST_SEEN=()
 declare -A HASH_UNIQUE_MANIFEST_COUNT=()
+
+confirm_delete_targets() {
+  local -a targets=("$@")
+  if (( AUTO_CONFIRM )); then
+    printf 'Auto-confirmed removal of the following %d item(s):\n' "${#targets[@]}"
+    for path in "${targets[@]}"; do
+      printf '  - %s\n' "$path"
+    done
+    return 0
+  fi
+
+  printf 'The following %d item(s) will be removed:\n' "${#targets[@]}"
+  for path in "${targets[@]}"; do
+    printf '  - %s\n' "$path"
+  done
+  printf 'Proceed? [y/N]: '
+  local reply
+  if ! read -r reply; then
+    return 1
+  fi
+  case "${reply,,}" in
+    y|yes)
+      return 0
+      ;;
+    *)
+      printf 'Skipping deletion.\n'
+      return 1
+      ;;
+  esac
+}
+
+delete_redundant_manifest() {
+  local manifest="$1"
+  local -a targets=()
+  if [[ -e "$manifest" ]]; then
+    targets+=("$manifest")
+  fi
+  if [[ "$manifest" == *.sha256 ]]; then
+    local archive="${manifest%.sha256}"
+    if [[ -e "$archive" ]]; then
+      targets+=("$archive")
+    fi
+  fi
+
+  if [[ "${#targets[@]}" -eq 0 ]]; then
+    printf 'warning: nothing to delete for %s (files missing)\n' "$manifest" >&2
+    return
+  fi
+
+  if confirm_delete_targets "${targets[@]}"; then
+    for path in "${targets[@]}"; do
+      if rm -f -- "$path"; then
+        printf 'Deleted %s\n' "$path"
+      else
+        printf 'Failed to delete %s\n' "$path" >&2
+      fi
+    done
+  fi
+}
 
 record_entry() {
   local hash="$1" manifest="$2" entry="$3"
@@ -108,8 +173,16 @@ while [[ $# -gt 0 ]]; do
       IDENTICAL_ONLY=1
       shift
       ;;
+    -D|--delete-identical)
+      DELETE_IDENTICAL=1
+      shift
+      ;;
     -S|--skip-intra-manifest)
       SKIP_INTRA_MANIFEST=1
+      shift
+      ;;
+    -y|--yes)
+      AUTO_CONFIRM=1
       shift
       ;;
     -h|--help)
@@ -136,6 +209,10 @@ fi
 
 if [[ "${#dirs[@]}" -eq 0 ]]; then
   dirs=(".")
+fi
+
+if (( DELETE_IDENTICAL && ! IDENTICAL_ONLY )); then
+  die "--delete-identical requires --identical-archives"
 fi
 
 for dir in "${dirs[@]}"; do
@@ -165,16 +242,26 @@ if (( IDENTICAL_ONLY )); then
     IFS=$GROUP_SEP read -r -a manifests_in_group <<<"${SIGNATURE_MANIFESTS["$signature"]}"
     if ((${#manifests_in_group[@]} > 1)); then
       identical_groups_found=1
+      mapfile -t manifests_in_group < <(printf '%s\n' "${manifests_in_group[@]}" | LC_ALL=C sort)
       entries="${MANIFEST_ENTRY_COUNTS["${manifests_in_group[0]}"]:-0}"
       printf '\nArchives with identical contents (%d entries):\n' "$entries"
       for manifest in "${manifests_in_group[@]}"; do
         printf '  - %s\n' "$manifest"
       done
+      if (( DELETE_IDENTICAL )); then
+        keeper="${manifests_in_group[0]}"
+        printf 'Deleting redundant archives from this group (keeping %s)...\n' "$keeper"
+        for manifest in "${manifests_in_group[@]:1}"; do
+          delete_redundant_manifest "$manifest"
+        done
+      fi
     fi
   done
 
   if (( identical_groups_found == 0 )); then
     printf 'No archives with identical contents were found.\n'
+  elif (( DELETE_IDENTICAL )); then
+    printf '\nDeletion pass complete.\n'
   fi
   exit 0
 fi

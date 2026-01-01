@@ -557,13 +557,57 @@ EOF
     echo "$identical_output" >&2
     return 1
   fi
+
+  local redundant_archive="${charlie%.sha256}"
+  cp -- "$bravo" "$charlie"
+  : >"$redundant_archive"
+  local delete_output
+  if ! delete_output="$("$REPO_ROOT/find-duplicate-sha256.sh" \
+      --identical-archives \
+      --delete-identical \
+      --yes \
+      "$manifest_dir" 2>&1)"; then
+    echo "find-duplicate-sha256.sh failed with deletion flags" >&2
+    echo "$delete_output" >&2
+    return 1
+  fi
+
+  if [[ "$delete_output" != *"Deletion pass complete."* ]]; then
+    echo "Deletion summary missing from --delete-identical run" >&2
+    echo "$delete_output" >&2
+    return 1
+  fi
+
+  if [[ -e "$charlie" || -e "$redundant_archive" ]]; then
+    echo "Redundant manifest/archive not removed under --delete-identical" >&2
+    return 1
+  fi
 }
 
 main() {
-  run_compress_test
-  run_decompress_test
-  run_analyze_archive_test
-  run_find_duplicate_sha256_test
+  local tests=(
+    "run_compress_test::Compression pipelines"
+    "run_decompress_test::Decompression pipelines"
+    "run_analyze_archive_test::Archive analyzer"
+    "run_find_duplicate_sha256_test::Duplicate detector"
+  )
+
+  printf 'Test plan (%d total):\n' "${#tests[@]}"
+  for idx in "${!tests[@]}"; do
+    local entry="${tests[$idx]}"
+    local fn label
+    IFS="::" read -r fn label <<<"$entry"
+    printf '  [%d/%d] %s -> %s\n' "$((idx + 1))" "${#tests[@]}" "$fn" "$label"
+  done
+
+  for idx in "${!tests[@]}"; do
+    local entry="${tests[$idx]}"
+    local fn label
+    IFS="::" read -r fn label <<<"$entry"
+    log "[${idx + 1}/${#tests[@]}] $label"
+    "$fn"
+  done
+
   log "All tests passed"
 }
 
