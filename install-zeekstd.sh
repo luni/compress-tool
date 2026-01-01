@@ -6,6 +6,16 @@ set -euo pipefail
 ZEEKSTD_TAG="${ZEEKSTD_TAG:-v0.4.3-cli}"
 REPO_URL="https://github.com/rorosen/zeekstd"
 MSRV="1.85.1"
+CARGO_BIN="${HOME}/.cargo/bin/zeekstd"
+CACHE_TAG_FILE="${HOME}/.cargo/zeekstd.tag"
+
+if [[ -x "${CARGO_BIN}" && -f "${CACHE_TAG_FILE}" ]]; then
+  CACHED_TAG="$(<"${CACHE_TAG_FILE}")"
+  if [[ "${CACHED_TAG}" == "${ZEEKSTD_TAG}" ]]; then
+    echo "[0/4] zeekstd ${ZEEKSTD_TAG} already installed; skipping build."
+    exit 0
+  fi
+fi
 
 need_cmd() { command -v "$1" >/dev/null 2>&1; }
 
@@ -57,5 +67,7 @@ echo "[3/4] Installing zeekstd CLI from ${REPO_URL} (tag: ${ZEEKSTD_TAG})..."
 cargo install --locked --git "${REPO_URL}" --tag "${ZEEKSTD_TAG}" zeekstd_cli
 
 echo "[4/4] Done."
+mkdir -p "$(dirname "${CACHE_TAG_FILE}")"
+echo "${ZEEKSTD_TAG}" > "${CACHE_TAG_FILE}"
 echo "Binary should be at: ${HOME}/.cargo/bin/zeekstd"
 echo "Test: ${HOME}/.cargo/bin/zeekstd --help"
