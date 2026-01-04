@@ -85,18 +85,18 @@ verify_checksum_file() {
 
   while IFS= read -r line || [[ -n "$line" ]]; do
     [[ -z "$line" ]] && continue
-    local hash="${line%% *}"
-    local path="${line#*  }"
-    path="${path#"${path%%[! ]*}"}"
-    [[ -z "$path" ]] && continue
-    if [[ -n "${expected[$path]:-}" ]]; then
-      if [[ "$hash" != "${expected[$path]}" ]]; then
-        echo "Checksum mismatch for $path in $file" >&2
-        echo " expected: ${expected[$path]}" >&2
-        echo " actual  : $hash" >&2
-        return 1
+    if [[ "$line" =~ ^([[:xdigit:]]{64})[[:space:]][[:space:]]+(.+)$ ]]; then
+      local hash="${BASH_REMATCH[1]}"
+      local path="${BASH_REMATCH[2]}"
+      if [[ -n "${expected[$path]:-}" ]]; then
+        if [[ "$hash" != "${expected[$path]}" ]]; then
+          echo "Checksum mismatch for $path in $file" >&2
+          echo " expected: ${expected[$path]}" >&2
+          echo " actual  : $hash" >&2
+          return 1
+        fi
+        seen["$path"]=1
       fi
-      seen["$path"]=1
     fi
   done <"$file"
 

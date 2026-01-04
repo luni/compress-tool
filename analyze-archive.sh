@@ -167,7 +167,7 @@ list_archive_files_zip() {
 list_archive_files() {
   case "$ARCHIVE_TYPE" in
     7z) list_archive_files_7z "$ARCHIVE" ;;
-    tar) list_archive_files_tar "$ARCHIVE" ;;
+    tar|tar.gz|tar.xz|tar.bz2) list_archive_files_tar "$ARCHIVE" ;;
     zip) list_archive_files_zip "$ARCHIVE" ;;
     *)
       die "Unsupported archive type for $ARCHIVE"
@@ -181,7 +181,7 @@ stream_entry() {
     7z)
       "$SEVENZ_BIN" x -so -- "$archive" "$entry"
       ;;
-    tar)
+    tar|tar.gz|tar.xz|tar.bz2)
       tar_extract_entry "$archive" "$entry"
       ;;
     zip)
@@ -273,7 +273,7 @@ case "$ARCHIVE_TYPE" in
   zip)
     require_cmd unzip
     ;;
-  tar)
+  tar|tar.gz|tar.xz|tar.bz2)
     require_cmd tar
     TAR_COMPRESSION="$(detect_tar_compression "$ARCHIVE")"
     require_tar_filter_tool
@@ -316,7 +316,7 @@ log "Writing SHA-256 manifest to $OUTPUT_FILE"
 
 files_processed=0
 # Optimization for tar files - process all entries in a single decompression pass
-if [[ "$ARCHIVE_TYPE" == "tar" ]]; then
+if [[ "$ARCHIVE_TYPE" == "tar" || "$ARCHIVE_TYPE" == "tar.gz" || "$ARCHIVE_TYPE" == "tar.xz" || "$ARCHIVE_TYPE" == "tar.bz2" ]]; then
   log "Using optimized tar processing"
   tmp_tar_entries="$(mktemp)"
   if ! list_archive_files "$ARCHIVE" >"$tmp_tar_entries"; then
@@ -398,6 +398,6 @@ if [[ "$files_processed" -eq 0 ]]; then
   log "No files found inside archive."
   rm -f -- "$OUTPUT_FILE"
 else
-  LC_ALL=C sort -t $'\t' -k2,2 "$tmp_manifest" | awk -F $'\t' '{printf "%s  %s\n",$1,$2}' >"$OUTPUT_FILE"
+  LC_ALL=C sort -k2,2 "$tmp_manifest" | awk '{hash=$1; $1=""; sub(/^ +/, ""); printf "%s  %s\n", hash, $0}' >"$OUTPUT_FILE"
   log "Processed $files_processed file(s)."
 fi

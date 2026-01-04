@@ -23,6 +23,9 @@ run_convert_to_tarzst_suite() {
   log "Verifying convert-to-tarzst.sh handles 7z with SHA256 manifests"
 
   run_test_with_tmpdir _run_convert_to_tarzst_suite
+
+  log "Testing convert-to-tarzst.sh with spaces in filenames and directories"
+  run_test_with_tmpdir _run_convert_to_tarzst_spaces_test
 }
 
 _run_convert_to_tarzst_suite() {
@@ -234,6 +237,86 @@ _run_convert_to_tarzst_suite() {
 
     rm -f -- "$zip_converted" "$zip_manifest" "$zip_reconstructed_tar"
     rm -rf -- "$zip_extract_dir"
+  done
+}
+
+_run_convert_to_tarzst_spaces_test() {
+  local tmpdir="$1"
+  local input_dir="$tmpdir/input"
+  mkdir -p "$input_dir"
+
+  # Test cases with various space scenarios (avoiding tar normalization issues)
+  local rel_paths=(
+    "simple file.txt"
+    "folder with spaces/nested file.txt"
+    "deeply nested path with spaces/another file.dat"
+  )
+  local sizes=(
+    128
+    256
+    512
+  )
+
+  declare -A expected_hashes
+  for idx in "${!rel_paths[@]}"; do
+    local rel="${rel_paths[$idx]}"
+    local abs="$input_dir/$rel"
+    mkdir -p -- "$(dirname -- "$abs")"
+    generate_test_file "$abs" "${sizes[$idx]}" "Spaces test payload $idx"
+    expected_hashes["$rel"]="$(sha256sum -- "$abs" | awk '{print $1}')"
+  done
+
+  # Test with different archive types
+  local archive_types=("7z" "zip" "tar.gz")
+
+  for archive_type in "${archive_types[@]}"; do
+    log "  Testing spaces with $archive_type archive"
+
+    local archive="$tmpdir/spaces_test.$archive_type"
+    case "$archive_type" in
+      7z)
+        (
+          cd "$input_dir"
+          7z a -bd -y "$archive" "${rel_paths[@]}" >/dev/null
+        )
+        ;;
+      zip)
+        (
+          cd "$input_dir"
+          zip -q "$archive" "${rel_paths[@]}"
+        )
+        ;;
+      tar.gz)
+        tar -C "$input_dir" -cf - "${rel_paths[@]}" | gzip -c >"$archive"
+        ;;
+    esac
+
+    local output_tar_zst="$tmpdir/spaces_output_${archive_type//./_}.tar.zst"
+    local manifest="$tmpdir/spaces_manifest_${archive_type//./_}.sha256"
+
+    local script="$REPO_ROOT/convert-to-tarzst.sh"
+    if ! "$script" \
+        --output "$output_tar_zst" \
+        --sha256-file "$manifest" \
+        "$archive" >/dev/null 2>&1; then
+      echo "convert-to-tarzst.sh failed with spaces test for $archive_type" >&2
+      return 1
+    fi
+
+    [[ -f "$output_tar_zst" ]] || { echo "Output tar.zst not created for spaces test ($archive_type)" >&2; return 1; }
+    [[ -f "$manifest" ]] || { echo "SHA256 manifest not created for spaces test ($archive_type)" >&2; return 1; }
+
+    # Verify all entries are in the manifest with correct hashes
+    local verify_args=()
+    for rel in "${rel_paths[@]}"; do
+      verify_args+=("$rel" "${expected_hashes[$rel]}")
+    done
+    verify_checksum_file "$manifest" "${verify_args[@]}"
+
+    # Verify the archive can be extracted correctly
+    extract_and_verify_tarzst "$output_tar_zst" "$input_dir" "$tmpdir" "${rel_paths[@]}"
+
+    rm -f -- "$output_tar_zst" "$manifest" "$archive"
   done
 }
 

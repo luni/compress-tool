@@ -137,7 +137,7 @@ EOF
       ;;
   esac
 
-  LC_ALL=C sort -t $'\t' -k2,2 "$tmp_manifest" | awk '{printf "%s  %s\n",$1,$2}' >>"$dest"
+  LC_ALL=C sort -k2,2 "$tmp_manifest" | awk '{hash=$1; $1=""; sub(/^ +/, ""); printf "%s  %s\n", hash, $0}' >>"$dest"
 
   rm -f "$tmp_files" "$tmp_command" "$tmp_manifest"
 }

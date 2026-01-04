@@ -61,7 +61,19 @@ prepare_file_for_write "$OUTPUT_FILE"
 
 if command -v hashdeep >/dev/null 2>&1; then
   log "Using hashdeep for faster hashing"
-  hashdeep -l -c sha256 -r "$DIRECTORY" | awk -F, '!/^#/ {print $2 "  " $3}' >"$OUTPUT_FILE"
+  hashdeep -l -c sha256 -r "$DIRECTORY" | awk -F, -v dir="$DIRECTORY" '
+    /^#/ || /^%%%%/ || /^sha256[[:space:]]+filename$/ || /^$/ { next }
+    {
+      path = $3
+      # Remove directory prefix if present
+      if (index(path, dir "/") == 1) {
+        path = substr(path, length(dir) + 2)
+      }
+      # Remove leading ./ if present
+      gsub(/^\.\//, "", path)
+      print $2 "  " path
+    }
+  ' >"$OUTPUT_FILE"
 else
   log "Using find+sha256sum (hashdeep not available)"
   write_sha256_manifest "$DIRECTORY" "$OUTPUT_FILE"

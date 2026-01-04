@@ -60,19 +60,22 @@ _run_hash_folder_test() {
   # Verify all expected files are hashed correctly
   while IFS= read -r line || [[ -n "$line" ]]; do
     [[ -z "$line" ]] && continue
-    local hash="${line%% *}"
-    local path="${line#*  }"
-    path="${path#"${path%%[! ]*}"}"
-    [[ -z "$path" ]] && continue
+    if [[ "$line" =~ ^([[:xdigit:]]{64})[[:space:]][[:space:]]+(.+)$ ]]; then
+      local hash="${BASH_REMATCH[1]}"
+      local path="${BASH_REMATCH[2]}"
+      # Remove ./ prefix if present
+      path="${path#./}"
+      [[ -z "$path" ]] && continue
 
-    if [[ -n "${expected_hashes[$path]:-}" ]]; then
-      if [[ "$hash" != "${expected_hashes[$path]}" ]]; then
-        echo "Hash mismatch for $path" >&2
-        echo " expected: ${expected_hashes[$path]}" >&2
-        echo " actual  : $hash" >&2
-        return 1
+      if [[ -n "${expected_hashes[$path]:-}" ]]; then
+        if [[ "$hash" != "${expected_hashes[$path]}" ]]; then
+          echo "Hash mismatch for $path" >&2
+          echo " expected: ${expected_hashes[$path]}" >&2
+          echo " actual  : $hash" >&2
+          return 1
+        fi
+        unset expected_hashes["$path"]
       fi
-      unset expected_hashes["$path"]
     fi
   done <"$output_file"
 
