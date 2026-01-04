@@ -35,9 +35,9 @@ Usage:
 Options:
   -d, --dir DIR           Directory to scan (default: .)
   -s, --sha1 FILE         Create/truncate FILE and write SHA1 of originals (before compression per file)
-      --sha1-append        Append to FILE instead of truncating
-      --sha256 FILE        Create/truncate FILE and write SHA256 of originals (before compression per file)
-      --sha256-append      Append to FILE instead of truncating
+      --sha1-append       Append to FILE instead of truncating
+      --sha256 FILE       Create/truncate FILE and write SHA256 of originals (before compression per file)
+      --sha256-append     Append to FILE instead of truncating
   -t, --threshold SIZE    Small/Big split (default: 100MiB). Examples: 100M, 200MiB, 50000000
   -j, --jobs N            Parallel jobs for small files (default: 8)
 

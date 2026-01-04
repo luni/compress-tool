@@ -106,11 +106,11 @@ When you need to analyze every archive within a directory tree, pair the script
 with GNU `parallel`:
 
 ```
-find /data/archives -type f \( -name '*.tar*' -o -name '*.7z' -o -name '*.zip' \) -print0 |
+find . -type f \( -name '*.tar*' -o -name '*.7z' -o -name '*.zip' \) -print0 |
   parallel -0 -j8 --eta ./analyze-archive.sh {}
 ```
 
-The example above scans `/data/archives`, sends each archive path to
+The example above scans the current directory, sends each archive path to
 `analyze-archive.sh` using eight concurrent workers, and keeps a progress bar
 (`--eta`). Adjust the `find` predicate, job count (`-j`), or output location
 (`--output`) as needed for your environment.
