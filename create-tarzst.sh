@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-$0}")" && pwd)"
+# shellcheck source=common.sh
+source "${SCRIPT_DIR}/common.sh"
+
 SOURCE_DIR=""
 OUTPUT=""
 QUIET=0
@@ -38,11 +42,6 @@ EOF
 log() {
   [[ "$QUIET" -eq 1 ]] && return 0
   printf '%s\n' "$*" >&2
-}
-
-die() {
-  printf 'Error: %s\n' "$1" >&2
-  exit 2
 }
 
 default_output_path() {
@@ -144,10 +143,6 @@ fi
 if [[ -e "$OUTPUT" && "$FORCE" -ne 1 ]]; then
   die "Output already exists: $OUTPUT (use --force to overwrite)"
 fi
-
-require_cmd() {
-  command -v "$1" >/dev/null 2>&1 || die "Required tool '$1' is not on PATH."
-}
 
 require_cmd tar
 require_cmd pzstd
