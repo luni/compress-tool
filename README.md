@@ -1,22 +1,24 @@
 # Archiving Compression Tools ![CI status badge](https://github.com/luni/archive-tools/actions/workflows/tests.yml/badge.svg)
 
-`compress.sh` scans a directory for large text-ish artifacts (tar/sql/txt/csv/ibd) and
-compresses them using sensible defaults. Smaller files are processed in
+`compress.sh` scans a directory for large text-ish artifacts (tar/sql/txt/csv/ibd)
+and compresses them using sensible defaults. Smaller files are processed in
 parallel, while bigger blobs are streamed sequentially with progress output.
-`decompress.sh` reverses the process for `.xz`/`.txz` and `.zst`/`.tzst`
-artifacts while restoring the original modification time.
+`decompress.sh` restores `.xz/.txz`, `.zst/.tzst`, `.gz/.tgz`, and `.bz2/.tbz*`
+artifacts via the parallel decompressors `pixz`, `pzstd`, `pigz`, and `pbzip2`,
+writing the expanded file next to the source and preserving mtimes (optionally
+removing the original).
 `analyze-archive.sh` inspects `.7z`, `.tar*`, or `.zip` archives and produces a
 sorted manifest with the SHA-256 of every file inside without touching disk.
 `find-duplicate-sha256.sh` scans directories for those manifests, reports when
 the same digest appears in multiple archives, can skip intra-manifest duplicates
 if you only care about cross-archive collisions, and can list archives whose
 entire manifest contents are identical to another.
-`convert-to-tarzst.sh` rebuilds a `.7z` archive as a seekable `.tar.zst`
-payload using [`pzstd`](https://github.com/facebook/zstd/tree/dev/contrib/pzstd)
-and can also re-compress `.tar.gz/.tgz`, `.tar.xz/.txz`, and `.tar.bz2/.tbz*`
-archives into `.tar.zst` streams without touching disk.
-`create-tarzst.sh` tars any directory (numeric owners) and compresses it with
-`pzstd` into a seekable `.tar.zst`.
+`convert-to-tarzst.sh` rebuilds `.7z` or `.zip` archives (via temporary
+workspaces) and `.tar.gz/.xz/.bz2` streams (via pipes) as seekable `.tar.zst`
+payloads using [`pzstd`](https://github.com/facebook/zstd/tree/dev/contrib/pzstd).
+`create-tarzst.sh` tars any directory (numeric owners), compresses it with
+`pzstd` into a seekable `.tar.zst`, and can emit a SHA-256 manifest of the source
+tree in the same pass.
 
 ## Test chain
 
@@ -33,17 +35,19 @@ current status of that workflow on the `main` branch.
 | GNU coreutils (`find`, `stat`, `sha1sum`, `sha256sum`, `mktemp`, `touch`, etc.) | File discovery and bookkeeping. |
 | `pv` | Streams large files with progress bars when compressing “big” inputs. |
 | `xz` | Default compressor for “small” files and for `pixz`/`xz` outputs. |
-| `pixz` | Default compressor for “big” files; enables parallel xz for large archives. |
+| `pixz` | Default compressor for “big” files; enables parallel xz for large archives and is used by `decompress.sh`. |
+| `pigz` | Parallel gzip implementation used by `decompress.sh`, `convert-to-tarzst.sh`, and `analyze-archive.sh`. |
+| `pbzip2` | Parallel bzip2 implementation used by `decompress.sh`, `convert-to-tarzst.sh`, and `analyze-archive.sh`. |
 | `7z` **or** `7zr` | Required for `analyze-archive.sh` when inspecting `.7z` archives. |
 | `unzip` | Required for `analyze-archive.sh` when inspecting `.zip` archives. |
 | GNU `parallel` | Runs many small compression jobs concurrently. |
-| `pzstd` | Required to emit seekable `.tar.zst` outputs (`convert-to-tarzst.sh`, `create-tarzst.sh`). Provided by the `zstd` package. |
+| `pzstd` | Required to emit or read seekable `.tar.zst` outputs (`convert-to-tarzst.sh`, `create-tarzst.sh`, `decompress.sh`, `analyze-archive.sh`). Provided by the `zstd` package. |
 
 These tools must be on `$PATH`; the script will exit early when a required tool
 is missing. On Debian/Ubuntu systems you can install the full toolset with:
 
 ```
-sudo apt install bash coreutils pv xz-utils pixz parallel p7zip-full pigz pbzip2 pixz unzip zstd fzf pigz
+sudo apt install bash coreutils pv xz-utils pixz pigz pbzip2 parallel p7zip-full unzip zstd fzf
 ```
 
 ## Optional tools
@@ -52,11 +56,7 @@ Install the tools below only if you intend to select the corresponding flags:
 
 | Tool | When it is needed |
 | --- | --- |
-| `zstd` | Use `--small zstd` for small files or `--big zstd` for large files (also needed by `decompress.sh`). |
-| `pzstd` | Use `--big pzstd` for threaded Zstandard compression and for streaming `.tar.zst/.tzst` archives in `analyze-archive.sh`. |
-| `pigz` | Required by `analyze-archive.sh` to stream `.tar.gz/.tgz` archives. |
-| `pbzip2` | Required by `analyze-archive.sh` to stream `.tar.bz2/.tbz` archives. |
-| `pixz` | Required by `analyze-archive.sh` to stream `.tar.xz/.txz/.tlz` archives when the default `pixz` binary is not already present. |
+| `zstd` | Use `--small zstd` for small files or `--big zstd` for large files in `compress.sh`. |
 | `fzf` | Optional fuzzy finder that powers the multi-select UI when removing identical archives in `find-duplicate-sha256.sh`; falls back to a simple numeric prompt if missing. |
 
 ## Usage
@@ -92,15 +92,15 @@ ones append.
 ## Archive inspection (7z / tar / zip)
 
 Run `./analyze-archive.sh ARCHIVE` to compute the SHA-256 of every entry inside a
-7z, tar (including `.tar.gz/.tgz`, `.tar.bz2/.tbz`, `.tar.xz/.txz`, `.tar.zst/.tzst`),
-or zip file without extracting it to disk. Each digest is streamed to stdout for
-live progress and also written to `ARCHIVE.sha256`, which is sorted by path
-before being saved; override the destination with `--output FILE`. Add `--quiet`
-to suppress the progress logs if desired. Existing manifests are skipped unless
-`--overwrite` is supplied, and empty archives do not leave behind an empty
-output file. The script automatically picks the
-available `7z`/`7zr` binary and uses parallel decompressors (`pigz`, `pbzip2`,
-`pixz`, `pzstd`) to handle compressed tarballs efficiently.
+7z, tar (including `.tar.gz/.tgz/.taz`, `.tar.bz2/.tbz/.tbz2`, `.tar.xz/.txz/.tlz`,
+`.tar.zst/.tzst`), or zip file without extracting it to disk. Each digest is
+streamed to stdout for live progress and also written to `ARCHIVE.sha256`, which
+is sorted by path before being saved; override the destination with
+`--output FILE`. Add `--quiet` to suppress the progress logs if desired.
+Existing manifests are skipped unless `--overwrite` is supplied, and empty
+archives do not leave behind an empty output file. The script automatically
+chooses `7z`/`7zr`, detects tar compression, and uses the parallel decompressors
+`pigz`, `pbzip2`, `pixz`, or `pzstd` where appropriate.
 
 When you need to analyze every archive within a directory tree, pair the script
 with GNU `parallel`:
@@ -155,10 +155,10 @@ prompt is shown so you can still pick the targets interactively.
 
 The script extracts `.7z` sources with `7z` and `.zip` sources with `unzip` into
 temporary directories, streams the contents through `tar`, and pipes them into
-`pzstd` to produce `backups.tar.zst` alongside the original. `.tar.gz/.xz/.bz2`
-inputs skip the extraction step entirely; they are decompressed via
-`pigz/gzip`, `pixz/xz`, or `pbzip2/bzip2` pipelines directly into `pzstd` so no
-temporary workspace is needed.
+`pzstd` to produce `backups.tar.zst` alongside the original. `.tar.gz/.tgz`,
+`.tar.xz/.txz`, and `.tar.bz2/.tbz*` inputs skip the extraction step entirely;
+they are decompressed via `pigz`, `pixz`, or `pbzip2` pipelines directly into
+`pzstd` so no temporary workspace is needed.
 
 Key flags:
 
@@ -193,12 +193,15 @@ Run `./decompress.sh --help` to list every flag. Key toggles:
 ```(bash)
 ./decompress.sh \
   --dir /data/backups \
-  --compressor zstd \
+  --compressor pigz \
+  --compressor pzstd \
   --remove-compressed
 ```
 
-- Scans the target directory recursively for `.xz`/`.txz` or `.zst`/`.tzst`
-  files (limit to specific codecs with `--compressor`).
+- Scans the target directory recursively for `.xz/.txz`, `.zst/.tzst`,
+  `.gz/.tgz`, and `.bz2/.tbz*` files (limit to specific codecs with one or more
+  `--compressor` flags). Aliases like `xz`, `zstd`, `gzip`, or `bzip2` map to the
+  parallel implementations automatically.
 - Restores each archive beside the compressed input and reapplies the original
   modification time to the restored file.
 - Add `--remove-compressed` to delete the compressed artifact once restoration

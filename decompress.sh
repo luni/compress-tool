@@ -155,16 +155,16 @@ decompress_file() {
   log "decompress(${compressor}): $f -> $out"
   case "$compressor" in
     pixz)
-      if pixz -d -- "$f" >"$tmp"; then :; else rm -f -- "$tmp"; return 1; fi
+      if pixz -dk "$f" "$tmp"; then :; else rm -f -- "$tmp"; return 1; fi
       ;;
     pzstd)
-      if pzstd -d -q -- "$f" >"$tmp"; then :; else rm -f -- "$tmp"; return 1; fi
+      if pzstd -dqo "$tmp" "$f"; then :; else rm -f -- "$tmp"; return 1; fi
       ;;
     pigz)
-      if pigz -dc -- "$f" >"$tmp"; then :; else rm -f -- "$tmp"; return 1; fi
+      if pigz -dck "$f" >"$tmp"; then :; else rm -f -- "$tmp"; return 1; fi
       ;;
     pbzip2)
-      if pbzip2 -dc -- "$f" >"$tmp"; then :; else rm -f -- "$tmp"; return 1; fi
+      if pbzip2 -dck "$f" >"$tmp"; then :; else rm -f -- "$tmp"; return 1; fi
       ;;
   esac
 
