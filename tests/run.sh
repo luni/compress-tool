@@ -30,6 +30,7 @@ declare -a SUITES=(
   "analyze_archive.sh::Archive analyzer"
   "find_duplicate.sh::Duplicate detector"
   "convert_to_tarzst.sh::7z ➜ seekable tar.zst converter"
+  "create_tarzst.sh::Directory ➜ seekable tar.zst creator"
 )
 
 plan() {

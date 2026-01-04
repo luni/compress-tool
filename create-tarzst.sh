@@ -164,7 +164,7 @@ log "Creating tar.zst at $OUTPUT from $SOURCE_DIR ..."
   else
     tar --numeric-owner -cf - .
   fi
-) | pzstd "$PZSTD_LEVEL" -q -o "$OUTPUT"
+) | pzstd $PZSTD_LEVEL ${FORCE:+-f} -q -o "$OUTPUT"
 
 if [[ "$SHA256_ENABLED" -eq 1 ]]; then
   write_sha256_manifest "$SOURCE_DIR" "$SHA256_FILE"
