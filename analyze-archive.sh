@@ -287,18 +287,8 @@ case "$ARCHIVE_TYPE" in
 esac
 require_cmd sha256sum
 
-default_output_path() {
-  local archive="$1" dir base
-  dir="$(dirname -- "$archive")"
-  base="$(basename -- "$archive")"
-  if [[ "$base" == *.* ]]; then
-    base="${base%.*}"
-  fi
-  printf '%s/%s.sha256\n' "$dir" "$base"
-}
-
 if [[ -z "$OUTPUT_FILE" ]]; then
-  OUTPUT_FILE="$(default_output_path "$ARCHIVE")"
+  OUTPUT_FILE="$(default_sha256_path "$ARCHIVE")"
 fi
 
 if [[ -e "$OUTPUT_FILE" && "$OVERWRITE" -ne 1 ]]; then

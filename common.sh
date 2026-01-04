@@ -107,6 +107,9 @@ default_basename_path() {
     *.tgz|*.txz|*.tbz|*.tbz2)
       base="${base%.*}"
       ;;
+    *.tar)
+      base="${base%.tar}"
+      ;;
     *.7z|*.zip)
       base="${base%.*}"
       ;;
