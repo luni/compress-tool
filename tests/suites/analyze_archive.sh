@@ -10,7 +10,7 @@ require_cmd python3
 require_cmd tar
 require_cmd 7z
 require_cmd zip
-require_cmd unzip
+require_cmd unrar
 require_cmd sha256sum
 
 run_analyze_archive_case() {
@@ -69,6 +69,14 @@ _run_analyze_archive_case() {
       (
         cd "$input_dir"
         zip -q "$archive" "${rel_paths[@]}"
+      )
+      ;;
+    rar)
+      archive="$tmpdir/sample.rar"
+      (
+        cd "$input_dir"
+        # Use -r to recurse and preserve directory structure
+        rar a -r "$archive" . >/dev/null
       )
       ;;
     *)
@@ -177,7 +185,7 @@ run_analyze_archive_invalid_cases() {
 
 _run_analyze_archive_invalid_cases() {
   local tmpdir="$1"
-  local -a types=("7z" "tar" "zip")
+  local -a types=("7z" "tar" "zip" "rar")
 
   for archive_type in "${types[@]}"; do
     local invalid expected_msg
@@ -194,6 +202,10 @@ _run_analyze_archive_invalid_cases() {
         invalid="$tmpdir/bad.zip"
         expected_msg="Failed to list zip entries for $invalid"
         ;;
+      rar)
+        invalid="$tmpdir/bad.rar"
+        expected_msg="Failed to list rar entries for $invalid"
+        ;;
       *)
         echo "Unknown invalid archive type: $archive_type" >&2
         return 1
@@ -201,6 +213,10 @@ _run_analyze_archive_invalid_cases() {
     esac
 
     printf 'invalid archive payload (%s)\n' "$archive_type" >"$invalid"
+    # Make it more convincingly invalid for RAR by corrupting the header
+    if [[ "$archive_type" == "rar" ]]; then
+      printf '\x00\x00\x00\x00\x00\x00\x00\x00' >>"$invalid"
+    fi
     local manifest="${invalid%.*}.sha256"
     local output_file="$tmpdir/output-${archive_type}.log"
 
@@ -225,11 +241,145 @@ _run_analyze_archive_invalid_cases() {
   done
 }
 
+run_analyze_archive_password_protected() {
+  log "Running analyze-archive.sh password-protected archive tests"
+
+  run_test_with_tmpdir _run_analyze_archive_password_protected
+}
+
+_run_analyze_archive_password_protected() {
+  local tmpdir="$1"
+  local input_dir="$tmpdir/input"
+  local archive="$tmpdir/password_protected.7z"
+  local manifest="${archive%.*}.sha256"
+  local output_file="$tmpdir/output.log"
+
+  mkdir -p "$input_dir"
+
+  # Create test files
+  local rel_paths=(
+    "secret.txt"
+    "data/config.json"
+  )
+
+  for rel in "${rel_paths[@]}"; do
+    local abs="$input_dir/$rel"
+    mkdir -p -- "$(dirname -- "$abs")"
+    generate_test_file "$abs" 1024 "Password protected test data"
+  done
+
+  # Create password-protected 7z archive
+  (
+    cd "$input_dir"
+    if ! 7z a -bd -y -p"test_password123" "$archive" "${rel_paths[@]}" >/dev/null 2>&1; then
+      echo "Failed to create password-protected 7z archive" >&2
+      return 1
+    fi
+  )
+
+  # Verify the archive is password-protected by attempting to extract without password
+  # Listing should work (7z shows metadata without password), but extraction should fail
+  if ! 7z l "$archive" >/dev/null 2>&1; then
+    echo "Password-protected archive listing failed unexpectedly" >&2
+    return 1
+  fi
+
+  # Test that analyze-archive.sh fails on password-protected archive
+  # With the default invalid password, it should fail fast with clear error
+  if "$REPO_ROOT/analyze-archive.sh" "$archive" >"$output_file" 2>&1; then
+    echo "analyze-archive.sh unexpectedly succeeded on password-protected 7z archive" >&2
+    cat "$output_file" >&2
+    return 1
+  fi
+
+  # Check that appropriate error message is shown
+  local output
+  output="$(cat "$output_file")"
+  if [[ "$output" != *"Data Error in encrypted file. Wrong password"* && "$output" != *"Failed to compute SHA-256 for"* ]]; then
+    echo "Expected password error message missing for password-protected 7z archive" >&2
+    echo "$output" >&2
+    return 1
+  fi
+
+  # Verify that no manifest file was created
+  if [[ -e "$manifest" ]]; then
+    echo "Manifest should not be created when analyze-archive.sh fails on password-protected archive" >&2
+    return 1
+  fi
+
+  log "Password-protected 7z archive test passed - correctly skipped/handled"
+}
+
+run_analyze_archive_password_protected_zip() {
+  log "Running analyze-archive.sh password-protected ZIP archive tests"
+
+  run_test_with_tmpdir _run_analyze_archive_password_protected_zip
+}
+
+_run_analyze_archive_password_protected_zip() {
+  local tmpdir="$1"
+  local input_dir="$tmpdir/input"
+  local archive="$tmpdir/password_protected.zip"
+  local manifest="${archive%.*}.sha256"
+  local output_file="$tmpdir/output.log"
+
+  mkdir -p "$input_dir"
+
+  # Create test files
+  local rel_paths=(
+    "secret.txt"
+    "data/config.json"
+  )
+
+  for rel in "${rel_paths[@]}"; do
+    local abs="$input_dir/$rel"
+    mkdir -p -- "$(dirname -- "$abs")"
+    generate_test_file "$abs" 1024 "Password protected ZIP test data"
+  done
+
+  # Create password-protected ZIP archive
+  (
+    cd "$input_dir"
+    if ! zip -r -P"test_password123" "$archive" "${rel_paths[@]}" >/dev/null 2>&1; then
+      echo "Failed to create password-protected ZIP archive" >&2
+      return 1
+    fi
+  )
+
+  # Test that analyze-archive.sh fails on password-protected ZIP archive
+  # With the default invalid password, it should fail fast with clear error
+  if "$REPO_ROOT/analyze-archive.sh" "$archive" >"$output_file" 2>&1; then
+    echo "analyze-archive.sh unexpectedly succeeded on password-protected ZIP archive" >&2
+    cat "$output_file" >&2
+    return 1
+  fi
+
+  # Check that appropriate error message is shown
+  local output
+  output="$(cat "$output_file")"
+  if [[ "$output" != *"Wrong password"* && "$output" != *"Failed to compute SHA-256 for"* ]]; then
+    echo "Expected password error message missing for password-protected ZIP archive" >&2
+    echo "$output" >&2
+    return 1
+  fi
+
+  # Verify that no manifest file was created
+  if [[ -e "$manifest" ]]; then
+    echo "Manifest should not be created when analyze-archive.sh fails on password-protected ZIP archive" >&2
+    return 1
+  fi
+
+  log "Password-protected ZIP archive test passed - correctly skipped/handled"
+}
+
 run_analyze_archive_suite() {
   run_analyze_archive_case tar
   run_analyze_archive_case 7z
   run_analyze_archive_case zip
+  run_analyze_archive_case rar
   run_analyze_archive_invalid_cases
+  run_analyze_archive_password_protected
+  run_analyze_archive_password_protected_zip
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

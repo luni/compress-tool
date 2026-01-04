@@ -35,6 +35,7 @@ Options:
   -o, --output FILE   Target SHA-256 manifest (default: ARCHIVE basename + .sha256)
   -q, --quiet         Suppress progress logs
       --overwrite     Overwrite existing manifest if present
+  -p, --password PWD  Password for encrypted archives (default: INVALID_PASSWORD)
   -h, --help          Show this help message
 EOF
 }
@@ -161,34 +162,90 @@ list_archive_files_zip() {
   local archive="$1" entry
   local listing_tmp
   listing_tmp="$(mktemp)"
-  if ! unzip -Z1 -- "$archive" >"$listing_tmp" 2>&1; then
+  if ! "$SEVENZ_BIN" l -slt -- "$archive" >"$listing_tmp" 2>&1; then
     cat "$listing_tmp" >&2
     rm -f "$listing_tmp"
     die "Failed to list zip entries for $archive"
   fi
 
-  while IFS= read -r entry; do
-    [[ -z "$entry" ]] && continue
-    [[ "$entry" == */ ]] && continue
-    printf '%s\0' "$entry"
+  # Parse 7z listing output similar to 7z format
+  local line path attrs started=0
+  flush_entry() {
+    if [[ -n "$path" && "$attrs" != *D* ]]; then
+      printf '%s\0' "$path"
+    fi
+    path=""
+    attrs=""
+  }
+
+  while IFS= read -r line; do
+    line="${line%$'\r'}"
+
+    if [[ "$line" == "----------" ]]; then
+      if [[ "$started" -eq 0 ]]; then
+        started=1
+      else
+        flush_entry
+      fi
+      continue
+    fi
+
+    [[ "$started" -eq 0 ]] && continue
+
+    if [[ -z "$line" ]]; then
+      flush_entry
+      continue
+    fi
+
+    if [[ "$line" == Path\ =\ * ]]; then
+      path="${line#Path = }"
+    elif [[ "$line" == Attributes\ =\ * ]]; then
+      attrs="${line#Attributes = }"
+    fi
   done <"$listing_tmp"
+
   rm -f "$listing_tmp"
+  flush_entry
 }
 
 list_archive_files_rar() {
-  local archive="$1" entry
+  local archive="$1" entry line entry_type
   local listing_tmp
   listing_tmp="$(mktemp)"
-  if ! unrar lb -- "$archive" >"$listing_tmp" 2>&1; then
+  if ! unrar lt -- "$archive" >"$listing_tmp" 2>&1; then
     cat "$listing_tmp" >&2
     rm -f "$listing_tmp"
     die "Failed to list rar entries for $archive"
   fi
 
-  while IFS= read -r entry; do
-    [[ -z "$entry" ]] && continue
-    [[ "$entry" == */ ]] && continue
-    printf '%s\0' "$entry"
+  # Check if the output contains an error message about not being a RAR archive
+  if grep -q "is not RAR archive" "$listing_tmp"; then
+    cat "$listing_tmp" >&2
+    rm -f "$listing_tmp"
+    die "Failed to list rar entries for $archive"
+  fi
+
+  # Parse unrar lt output which has a clean key: value format
+  # We need to track both Name and Type fields for each entry
+  while IFS= read -r line; do
+    # Look for lines that start with "Name:" and extract the filename
+    if [[ "$line" =~ ^[[:space:]]*Name:[[:space:]]*(.+)$ ]]; then
+      entry="${BASH_REMATCH[1]}"
+      continue
+    fi
+
+    # Look for lines that start with "Type:" to determine if it's a file
+    if [[ "$line" =~ ^[[:space:]]*Type:[[:space:]]*(.+)$ ]]; then
+      entry_type="${BASH_REMATCH[1]}"
+
+      # Only process if we have a name and it's a file (not directory)
+      if [[ -n "$entry" && "$entry_type" == "File" ]]; then
+        printf '%s\0' "$entry"
+      fi
+
+      # Reset entry for next iteration
+      entry=""
+    fi
   done <"$listing_tmp"
   rm -f "$listing_tmp"
 }
@@ -209,16 +266,38 @@ stream_entry() {
   local archive="$1" entry="$2"
   case "$ARCHIVE_TYPE" in
     7z)
-      "$SEVENZ_BIN" x -so -- "$archive" "$entry"
+      "$SEVENZ_BIN" x -so -p"$ARCHIVE_PASSWORD" -- "$archive" "$entry"
       ;;
     tar|tar.gz|tar.xz|tar.bz2)
       tar_extract_entry "$archive" "$entry"
       ;;
     zip)
-      unzip -p -- "$archive" "$entry"
+      "$SEVENZ_BIN" x -so -p"$ARCHIVE_PASSWORD" -- "$archive" "$entry"
       ;;
     rar)
-      unrar p -idq -- "$archive" "$entry"
+      # unrar p will fail on directories, so we need to handle that
+      local output
+      if ! output="$(unrar p -idq -p"$ARCHIVE_PASSWORD" -- "$archive" "$entry" 2>&1)"; then
+        # If extraction fails, it might be a directory or password error
+        # Check if it's a password error (exit code 11) or directory issue
+        local exit_code=$?
+        if [[ $exit_code -eq 11 ]]; then
+          echo "Incorrect password for $entry" >&2
+          return 1
+        else
+          # Likely a directory, skip it
+          return 0
+        fi
+      fi
+
+      # Check if output is empty (which also indicates password error)
+      if [[ -z "$output" ]]; then
+        echo "Incorrect password for $entry" >&2
+        return 1
+      fi
+
+      # Output the file content
+      printf '%s' "$output"
       ;;
     *)
       die "Unsupported archive type for streaming: $ARCHIVE_TYPE"
@@ -238,6 +317,7 @@ OVERWRITE=0
 ARCHIVE_TYPE="7z"
 SEVENZ_BIN="7z"
 TAR_COMPRESSION="none"
+ARCHIVE_PASSWORD="INVALID_PASSWORD"
 
 select_7z_tool() {
   if command -v 7z >/dev/null 2>&1; then
@@ -265,6 +345,11 @@ while [[ $# -gt 0 ]]; do
     --overwrite)
       OVERWRITE=1
       shift
+      ;;
+    -p|--password)
+      [[ $# -lt 2 ]] && die "Missing value for $1"
+      ARCHIVE_PASSWORD="$2"
+      shift 2
       ;;
     -h|--help)
       usage
@@ -304,7 +389,8 @@ fi
 
 case "$ARCHIVE_TYPE" in
   zip)
-    require_cmd unzip
+    # ZIP files are handled by 7z, no need for unzip
+    select_7z_tool
     ;;
   rar)
     require_cmd unrar
