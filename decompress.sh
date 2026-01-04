@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-$0}")" && pwd)"
+# shellcheck source=common.sh
+source "${SCRIPT_DIR}/common.sh"
+
 SCAN_DIR="."
 LOG=1
 REMOVE_COMPRESSED=0
 CUSTOM_COMPRESSORS=0
-SUPPORTED_COMPRESSORS=(xz zstd)
+SUPPORTED_COMPRESSORS=(pixz pzstd pigz pbzip2)
 
 usage() {
   cat >&2 <<'EOF'
@@ -14,8 +18,9 @@ Usage:
 
 Options:
   -d, --dir DIR             Directory to scan for compressed files (default: .)
-  -c, --compressor NAME     Limit to a compressor (xz or zstd). May be repeated or
-                            receive a comma-separated list. First use replaces defaults.
+  -c, --compressor NAME     Limit to a decompressor (pixz, pzstd, pigz, pbzip2).
+                            May be repeated or receive a comma-separated list.
+                            First use replaces defaults.
       --remove-compressed   Delete the compressed file after a successful restore.
   -q, --quiet               Suppress info logs.
   -h, --help                Show this help text.
@@ -23,11 +28,6 @@ EOF
 }
 
 log() { [[ "$LOG" == "1" ]] && printf '%s\n' "$*" >&2; }
-
-die() {
-  printf 'Error: %s\n' "$1" >&2
-  exit 2
-}
 
 compressor_enabled() {
   local needle="$1"
@@ -44,8 +44,20 @@ add_compressors() {
     part="${part,,}"
     [[ -z "$part" ]] && continue
     case "$part" in
-      xz|zstd)
+      pixz|pzstd|pigz|pbzip2)
         SUPPORTED_COMPRESSORS+=("$part")
+        ;;
+      xz)
+        SUPPORTED_COMPRESSORS+=("pixz")
+        ;;
+      zstd|pzstd)
+        SUPPORTED_COMPRESSORS+=("pzstd")
+        ;;
+      gzip|pigz)
+        SUPPORTED_COMPRESSORS+=("pigz")
+        ;;
+      bzip2|pbzip2)
+        SUPPORTED_COMPRESSORS+=("pbzip2")
         ;;
       *)
         die "Unsupported compressor: $part"
@@ -74,7 +86,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "${#SUPPORTED_COMPRESSORS[@]}" -eq 0 ]]; then
-  die "At least one compressor must be enabled (xz or zstd)."
+  die "At least one decompressor must be enabled (pixz, pzstd, pigz, or pbzip2)."
 fi
 
 for comp in "${SUPPORTED_COMPRESSORS[@]}"; do
@@ -82,8 +94,10 @@ for comp in "${SUPPORTED_COMPRESSORS[@]}"; do
 done
 
 declare -A COMPRESSOR_EXTS=(
-  [xz]="xz txz"
-  [zstd]="zst tzst"
+  [pixz]="xz txz"
+  [pzstd]="zst tzst"
+  [pigz]="gz tgz"
+  [pbzip2]="bz2 tbz tbz2"
 )
 
 ext_pred=()
@@ -114,10 +128,14 @@ restore_mtime() {
 decompress_file() {
   local f="$1" compressor out tmp
   case "$f" in
-    *.txz) compressor="xz"; out="${f%.txz}.tar" ;;
-    *.xz)  compressor="xz"; out="${f%.xz}" ;;
-    *.tzst) compressor="zstd"; out="${f%.tzst}.tar" ;;
-    *.zst) compressor="zstd"; out="${f%.zst}" ;;
+    *.txz)  compressor="pixz"; out="${f%.txz}.tar" ;;
+    *.xz)   compressor="pixz"; out="${f%.xz}" ;;
+    *.tzst) compressor="pzstd"; out="${f%.tzst}.tar" ;;
+    *.zst)  compressor="pzstd"; out="${f%.zst}" ;;
+    *.tgz)  compressor="pigz"; out="${f%.tgz}.tar" ;;
+    *.gz)   compressor="pigz"; out="${f%.gz}" ;;
+    *.tbz|*.tbz2) compressor="pbzip2"; out="${f%.*}.tar" ;;
+    *.bz2)  compressor="pbzip2"; out="${f%.bz2}" ;;
     *) log "skip (unknown extension): $f"; return 0 ;;
   esac
 
@@ -136,11 +154,17 @@ decompress_file() {
 
   log "decompress(${compressor}): $f -> $out"
   case "$compressor" in
-    xz)
-      if xz -dc -- "$f" >"$tmp"; then :; else rm -f -- "$tmp"; return 1; fi
+    pixz)
+      if pixz -d -- "$f" >"$tmp"; then :; else rm -f -- "$tmp"; return 1; fi
       ;;
-    zstd)
-      if zstd -dc -q -- "$f" >"$tmp"; then :; else rm -f -- "$tmp"; return 1; fi
+    pzstd)
+      if pzstd -d -q -- "$f" >"$tmp"; then :; else rm -f -- "$tmp"; return 1; fi
+      ;;
+    pigz)
+      if pigz -dc -- "$f" >"$tmp"; then :; else rm -f -- "$tmp"; return 1; fi
+      ;;
+    pbzip2)
+      if pbzip2 -dc -- "$f" >"$tmp"; then :; else rm -f -- "$tmp"; return 1; fi
       ;;
   esac
 

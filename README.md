@@ -63,7 +63,7 @@ Install the tools below only if you intend to select the corresponding flags:
 
 Run `./compress.sh --help` for the exhaustive flag list. Key options:
 
-```
+```(bash)
 ./compress.sh \
   --dir /data/backups \
   --threshold 200MiB \
@@ -105,7 +105,7 @@ available `7z`/`7zr` binary and uses parallel decompressors (`pigz`, `pbzip2`,
 When you need to analyze every archive within a directory tree, pair the script
 with GNU `parallel`:
 
-```
+```(bash)
 find . -type f \( -name '*.tar*' -o -name '*.7z' -o -name '*.zip' \) -print0 |
   parallel -0 -j8 --eta ./analyze-archive.sh {}
 ```
@@ -120,7 +120,7 @@ The example above scans the current directory, sends each archive path to
 Once you have a collection of `.sha256` manifests you can identify archives that
 contain identical files (same SHA-256 digest) by scanning the directory tree:
 
-```
+```(bash)
 ./find-duplicate-sha256.sh /data/archives/manifests
 ```
 
@@ -146,7 +146,8 @@ prompt is shown so you can still pick the targets interactively.
 1. Convert `.7z` **or** `.zip` archives (extracted to a temp dir with `7z` or
    `unzip`) or `.tar.{gz,xz,bz2}` inputs (streamed via pipes) to seekable
    `.tar.zst`:
-   ```
+
+   ```(bash)
    ./convert-to-tarzst.sh backups.7z
    ./convert-to-tarzst.sh reports.zip
    ./convert-to-tarzst.sh backups.tar.gz
@@ -176,7 +177,7 @@ The resulting `.tar.zst` inherits the original archive’s modification time.
 
 Run:
 
-```
+```(bash)
 ./create-tarzst.sh /path/to/directory
 ```
 
@@ -189,7 +190,7 @@ pass `--quiet` / `--force` for less logging and overwriting existing outputs.
 
 Run `./decompress.sh --help` to list every flag. Key toggles:
 
-```
+```(bash)
 ./decompress.sh \
   --dir /data/backups \
   --compressor zstd \
