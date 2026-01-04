@@ -23,6 +23,7 @@ run_analyze_archive_case() {
 _run_analyze_archive_case() {
   local tmpdir="$1"
   local archive_type="$2"
+  local LC_ALL=C
   local input_dir="$tmpdir/input"
   local archive
   local expected_log=""
@@ -32,11 +33,13 @@ _run_analyze_archive_case() {
     "alpha.txt"
     "sub dir/bravo.bin"
     "spaces/charlie data.csv"
+    $'unicode set ♫/資料セット №1/emoji_файл 😀.txt'
   )
   local sizes=(
     1024
     2048
     512
+    4096
   )
 
   declare -A expected_hashes

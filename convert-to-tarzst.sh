@@ -58,20 +58,23 @@ tar_list_entries() {
   local archive="$1" dest="$2" compression="$3"
 
   run_tar_list() {
+    local tar_base=(tar --quoting-style=literal --show-transformed-names -tf)
     case "$compression" in
       gz)
         require_cmd gzip
-        gzip -dc -- "$archive" | tar -tf -
+        gzip -dc -- "$archive" | "${tar_base[@]}" -
         ;;
       bz2)
         require_cmd bzip2
-        bzip2 -dc -- "$archive" | tar -tf -
+        bzip2 -dc -- "$archive" | "${tar_base[@]}" -
         ;;
       xz)
         require_cmd xz
-        xz -dc -- "$archive" | tar -tf -
+        xz -dc -- "$archive" | "${tar_base[@]}" -
         ;;
-      none) tar -tf "$archive" ;;
+      none)
+        "${tar_base[@]}" "$archive"
+        ;;
     esac
   }
 
@@ -110,11 +113,11 @@ if [[ -z "$f" || "$f" == */ ]]; then
   exit 0
 fi
 hash="$(sha256sum | awk '{print $1}')"
+manifest_line="$(printf '%s\t%s\n' "$hash" "$f")"
 if [[ -n "${TMP_MANIFEST:-}" ]]; then
-  printf '%s  %s\n' "$hash" "$f" | tee -a "$TMP_MANIFEST"
-else
-  printf '%s  %s\n' "$hash" "$f"
+  printf '%s\n' "$manifest_line" >>"$TMP_MANIFEST"
 fi
+printf '%s  %s\n' "$hash" "$f"
 EOF
   chmod +x "$tmp_command"
 
@@ -137,7 +140,7 @@ EOF
       ;;
   esac
 
-  LC_ALL=C sort -k2,2 "$tmp_manifest" | awk '{hash=$1; $1=""; sub(/^ +/, ""); printf "%s  %s\n", hash, $0}' >>"$dest"
+  LC_ALL=C sort -t $'\t' -k2,2 "$tmp_manifest" | awk -F $'\t' '{printf "%s  %s\n", $1, $2}' >>"$dest"
 
   rm -f "$tmp_files" "$tmp_command" "$tmp_manifest"
 }

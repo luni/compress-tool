@@ -107,12 +107,23 @@ tar_list_entries() {
   local archive="$1" dest="$2"
 
   run_tar_list() {
+    local tar_base=(tar --quoting-style=literal --show-transformed-names -tf)
     case "$TAR_COMPRESSION" in
-      gz) pigz -dc -- "$archive" | tar -tf - ;;
-      bz2) pbzip2 -dc -- "$archive" | tar -tf - ;;
-      xz) pixz -d -c -- "$archive" | tar -tf - ;;
-      zst) pzstd -d -q -c -- "$archive" | tar -tf - ;;
-      none) tar -tf "$archive" ;;
+      gz)
+        pigz -dc -- "$archive" | "${tar_base[@]}" -
+        ;;
+      bz2)
+        pbzip2 -dc -- "$archive" | "${tar_base[@]}" -
+        ;;
+      xz)
+        pixz -d -c -- "$archive" | "${tar_base[@]}" -
+        ;;
+      zst)
+        pzstd -d -q -c -- "$archive" | "${tar_base[@]}" -
+        ;;
+      none)
+        "${tar_base[@]}" "$archive"
+        ;;
     esac
   }
 
@@ -388,6 +399,6 @@ if [[ "$files_processed" -eq 0 ]]; then
   log "No files found inside archive."
   rm -f -- "$OUTPUT_FILE"
 else
-  LC_ALL=C sort -k2,2 "$tmp_manifest" | awk '{hash=$1; $1=""; sub(/^ +/, ""); printf "%s  %s\n", hash, $0}' >"$OUTPUT_FILE"
+  LC_ALL=C sort -t $'\t' -k2,2 "$tmp_manifest" | awk -F $'\t' '{printf "%s  %s\n", $1, $2}' >"$OUTPUT_FILE"
   log "Processed $files_processed file(s)."
 fi
