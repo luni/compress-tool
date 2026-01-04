@@ -94,26 +94,37 @@ detect_tar_compression() {
 }
 
 # File path manipulation
+strip_archive_suffixes() {
+  local name="$1" lowered
+  while :; do
+    lowered="${name,,}"
+    case "$lowered" in
+      *.tar.gz|*.tar.bz2|*.tar.xz|*.tar.zst)
+        name="${name%.*}"
+        name="${name%.*}"
+        ;;
+      *.tar)
+        name="${name%.tar}"
+        ;;
+      *.tgz|*.txz|*.tbz|*.tbz2|*.tzst|*.tlz|*.taz)
+        name="${name%.*}"
+        ;;
+      *.7z|*.zip)
+        name="${name%.*}"
+        ;;
+      *)
+        break
+        ;;
+    esac
+  done
+  printf '%s\n' "$name"
+}
+
 default_basename_path() {
   local archive="$1" dir base
   dir="$(dirname -- "$archive")"
   base="$(basename -- "$archive")"
-  local lowered="${base,,}"
-  case "$lowered" in
-    *.tar.gz|*.tar.xz|*.tar.bz2)
-      base="${base%.*}"
-      base="${base%.*}"
-      ;;
-    *.tgz|*.txz|*.tbz|*.tbz2)
-      base="${base%.*}"
-      ;;
-    *.tar)
-      base="${base%.tar}"
-      ;;
-    *.7z|*.zip)
-      base="${base%.*}"
-      ;;
-  esac
+  base="$(strip_archive_suffixes "$base")"
   printf '%s/%s\n' "$dir" "$base"
 }
 
