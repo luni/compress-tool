@@ -14,10 +14,10 @@ require_cmd sha1sum
 require_cmd sha256sum
 
 run_single_compress_test() {
-  local small_comp="$1" big_comp="$2" label="$3"
+  local small_comp="$1" big_comp="$2" label="$3" big_jobs="${4:-1}"
   log "Running compress.sh test (${label})"
 
-  run_test_with_tmpdir _run_single_compress_test "$small_comp" "$big_comp" "$label"
+  run_test_with_tmpdir _run_single_compress_test "$small_comp" "$big_comp" "$label" "$big_jobs"
 }
 
 _run_single_compress_test() {
@@ -25,6 +25,7 @@ _run_single_compress_test() {
   local small_comp="$2"
   local big_comp="$3"
   local label="$4"
+  local big_jobs="$5"
   local threshold_bytes=$((2 * 1024))
   local sha1_file="$tmpdir/checksums.sha1"
   local sha256_file="$tmpdir/checksums.sha256"
@@ -63,6 +64,7 @@ _run_single_compress_test() {
       --jobs 2 \
       --small "$small_comp" \
       --big "$big_comp" \
+      --big-jobs "$big_jobs" \
       --threshold "$threshold_bytes" \
       --sha1 "$sha1_file" \
       --sha256 "$sha256_file" 2>&1)"; then
@@ -120,6 +122,7 @@ _run_single_compress_test() {
 run_compress_suite() {
   run_single_compress_test xz xz "xz-only"
   run_single_compress_test zstd zstd "zstd-only"
+  run_single_compress_test zstd zstd "zstd-big-parallel" 2
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

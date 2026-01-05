@@ -15,6 +15,7 @@ CHECKSUM_DELIM=$'\x1f'
 
 THRESHOLD_BYTES=$((100 * 1024 * 1024))   # 100 MiB
 SMALL_JOBS=8
+BIG_JOBS=1
 
 SMALL_COMPRESSOR="xz"   # xz | zstd
 BIG_COMPRESSOR="pixz"   # pixz | xz | pzstd | zstd
@@ -111,6 +112,7 @@ while [[ $# -gt 0 ]]; do
     -j|--jobs) SMALL_JOBS="$2"; shift 2 ;;
     --small) SMALL_COMPRESSOR="$2"; shift 2 ;;
     --big) BIG_COMPRESSOR="$2"; shift 2 ;;
+    --big-jobs) BIG_JOBS="$2"; shift 2 ;;
     --xz-level) XZ_LEVEL="$2"; shift 2 ;;
     --zstd-level) ZSTD_LEVEL="$2"; shift 2 ;;
     --pzstd-level) PZSTD_LEVEL="$2"; shift 2 ;;
@@ -356,8 +358,8 @@ compress_big_seq() {
   [[ -n "$sha256_line" ]] && append_checksum_line sha256 "$sha256_line"
 }
 
-export -f compress_small out_name emit_checksum_lines log skip_if_already_compressed detect_actual_format get_expected_extension
-export SMALL_COMPRESSOR XZ_LEVEL ZSTD_LEVEL QUIET SHA1_FILE SHA256_FILE CHECKSUM_DELIM REMOVE_SOURCE
+export -f compress_small compress_big_seq out_name emit_checksum_lines append_checksum_line log skip_if_already_compressed detect_actual_format get_expected_extension
+export SMALL_COMPRESSOR BIG_COMPRESSOR BIG_JOBS XZ_LEVEL ZSTD_LEVEL PZSTD_LEVEL QUIET SHA1_FILE SHA256_FILE CHECKSUM_DELIM REMOVE_SOURCE
 
 small_list="$(mktemp)"
 big_list="$(mktemp)"
@@ -401,11 +403,13 @@ else
   parallel -0 --no-run-if-empty --bar -j "$SMALL_JOBS" compress_small {} :::: "$small_list"
 fi
 
-# big files sequential
+# big files (parallelizable)
 if [[ -s "$big_list" ]]; then
-  while IFS= read -r -d '' f; do
-    compress_big_seq "$f"
-  done <"$big_list" || true
+  if [[ -n "$SHA1_FILE" || -n "$SHA256_FILE" ]]; then
+    parallel -0 --no-run-if-empty --bar --lb -j "$BIG_JOBS" compress_big_seq {} :::: "$big_list"
+  else
+    parallel -0 --no-run-if-empty --bar -j "$BIG_JOBS" compress_big_seq {} :::: "$big_list"
+  fi
 fi
 
 exit 0
