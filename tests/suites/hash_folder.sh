@@ -6,13 +6,12 @@ TEST_ROOT="$(cd "$SUITE_DIR/.." && pwd)"
 source "$TEST_ROOT/lib/common.sh"
 trap cleanup_tmpdirs EXIT
 
-require_cmd sha256sum
+# Use new command group requirements
+require_basic_commands
 
 run_hash_folder_test() {
   local method="$1"
-  log "Running hash-folder.sh test (${method})"
-
-  run_test_with_tmpdir _run_hash_folder_test "$method"
+  run_standard_test "hash-folder.sh test (${method})" _run_hash_folder_test "$method"
 }
 
 _run_hash_folder_test() {
@@ -21,30 +20,19 @@ _run_hash_folder_test() {
   local test_dir="$tmpdir/test_data"
   local output_file="$tmpdir/hashes.sha256"
 
-  local fixture_paths=(
-    "small.txt"
-    "sub dir/medium file.txt"
-    "big data/bigfile.sql"
-    "special chars/über@Data!.txt"
-    "empty file.txt"
-  )
-  local fixture_sizes=(
-    512
-    1536
-    $((64 * 1024))
-    $((96 * 1024))
-    0
-  )
+  # Use COMPRESSION fixture and add empty file manually
+  local hash_output
+  hash_output="$(create_standard_fixture "$test_dir" "COMPRESSION" "Hash folder fixture")"
 
+  # Parse hash output and create expected hashes
   declare -A expected_hashes
-  for idx in "${!fixture_paths[@]}"; do
-    local path="${fixture_paths[$idx]}"
-    local size="${fixture_sizes[$idx]}"
-    local full_path="$test_dir/$path"
-    mkdir -p -- "$(dirname -- "$full_path")"
-    generate_test_file "$full_path" "$size" "Hash folder fixture $idx"
-    expected_hashes["$path"]="$(sha256sum -- "$full_path" | awk '{print $1}')"
-  done
+  while IFS='=' read -r path hash; do
+    expected_hashes["$path"]="$hash"
+  done <<<"$hash_output"
+
+  # Add empty file manually
+  touch "$test_dir/empty file.txt"
+  expected_hashes["empty file.txt"]="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
   # Run hash-folder.sh
   local hash_script="$REPO_ROOT/hash-folder.sh"
@@ -89,9 +77,7 @@ _run_hash_folder_test() {
 }
 
 run_default_output_test() {
-  log "Running hash-folder.sh default output test"
-
-  run_test_with_tmpdir _run_default_output_test
+  run_standard_test "hash-folder.sh default output test" _run_default_output_test
 }
 
 _run_default_output_test() {
@@ -115,8 +101,10 @@ _run_default_output_test() {
 }
 
 run_help_test() {
-  log "Running hash-folder.sh help test"
+  run_standard_test "hash-folder.sh help test" _run_help_test
+}
 
+_run_help_test() {
   local hash_script="$REPO_ROOT/hash-folder.sh"
   local output
   output="$("$hash_script" --help 2>&1)"
@@ -129,9 +117,7 @@ run_help_test() {
 }
 
 run_error_tests() {
-  log "Running hash-folder.sh error tests"
-
-  run_test_with_tmpdir _run_error_tests
+  run_standard_test "hash-folder.sh error tests" _run_error_tests
 }
 
 _run_error_tests() {

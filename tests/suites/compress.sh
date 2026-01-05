@@ -6,18 +6,15 @@ TEST_ROOT="$(cd "$SUITE_DIR/.." && pwd)"
 source "$TEST_ROOT/lib/common.sh"
 trap cleanup_tmpdirs EXIT
 
-require_cmd parallel
-require_cmd xz
-require_cmd python3
-require_cmd zstd
+# Use new command group requirements
+require_parallel_commands
+require_compression_commands
+require_basic_commands
 require_cmd sha1sum
-require_cmd sha256sum
 
 run_single_compress_test() {
   local small_comp="$1" big_comp="$2" label="$3" big_jobs="${4:-1}"
-  log "Running compress.sh test (${label})"
-
-  run_test_with_tmpdir _run_single_compress_test "$small_comp" "$big_comp" "$label" "$big_jobs"
+  run_standard_test "compress.sh test (${label})" _run_single_compress_test "$small_comp" "$big_comp" "$label" "$big_jobs"
 }
 
 _run_single_compress_test() {
@@ -30,33 +27,31 @@ _run_single_compress_test() {
   local sha1_file="$tmpdir/checksums.sha1"
   local sha256_file="$tmpdir/checksums.sha256"
 
-  local fixture_paths=(
-    "small.txt"
-    "sub dir/medium file.txt"
-    "big data/bigfile.sql"
-    "special chars/über@Data!.txt"
-  )
-  local fixture_sizes=(
-    512
-    1536
-    $((64 * 1024))
-    $((96 * 1024))
+  # Use standard fixture - this is the main refactoring benefit
+  local hash_output
+  hash_output="$(create_standard_fixture "$tmpdir" "COMPRESSION" "Compression fixture ($label)")"
+
+  # Parse hash output and create test data
+  local -a fixture_paths
+  local -A expected_paths sha1_map sha256_map source_paths size_map
+
+  # Define sizes for COMPRESSION fixture
+  declare -A compression_sizes=(
+    ["small.txt"]=512
+    ["sub dir/medium file.txt"]=1536
+    ["big data/bigfile.sql"]=65536
+    ["special chars/über@Data!.txt"]=98304
   )
 
-  declare -A expected_paths sha1_map sha256_map size_map source_paths
-  for idx in "${!fixture_paths[@]}"; do
-    local path="${fixture_paths[$idx]}"
-    local size="${fixture_sizes[$idx]}"
-    local full_path="$tmpdir/$path"
-    mkdir -p -- "$(dirname -- "$full_path")"
-    generate_test_file "$full_path" "$size" "Compression fixture $idx ($label)"
-    expected_paths["$path"]="${full_path}.expected"
-    source_paths["$path"]="$full_path"
-    size_map["$path"]="$size"
-    cp -- "$full_path" "${expected_paths[$path]}"
-    sha1_map["$path"]="$(sha1sum -- "$full_path" | awk '{print $1}')"
-    sha256_map["$path"]="$(sha256sum -- "$full_path" | awk '{print $1}')"
-  done
+  while IFS='=' read -r path hash; do
+    fixture_paths+=("$path")
+    expected_paths["$path"]="$tmpdir/${path}.expected"
+    source_paths["$path"]="$tmpdir/$path"
+    size_map["$path"]="${compression_sizes[$path]}"
+    sha1_map["$path"]="$(sha1sum -- "$tmpdir/$path" | awk '{print $1}')"
+    sha256_map["$path"]="$(sha256sum -- "$tmpdir/$path" | awk '{print $1}')"
+    cp -- "$tmpdir/$path" "${expected_paths[$path]}"
+  done <<<"$hash_output"
 
   local output
   if ! output="$("$COMPRESS_SCRIPT" \

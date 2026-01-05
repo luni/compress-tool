@@ -6,16 +6,14 @@ TEST_ROOT="$(cd "$SUITE_DIR/.." && pwd)"
 source "$TEST_ROOT/lib/common.sh"
 trap cleanup_tmpdirs EXIT
 
-require_cmd python3
-require_cmd xz
-require_cmd zstd
-require_cmd 7z
+# Use new command group requirements
+require_basic_commands
+require_compression_commands
+require_archive_commands
 
 run_single_decompress_test() {
   local remove_flag="$1" label="$2"
-  log "Running decompress.sh test (${label})"
-
-  run_test_with_tmpdir _run_single_decompress_test "$remove_flag" "$label"
+  run_standard_test "decompress.sh test (${label})" _run_single_decompress_test "$remove_flag" "$label"
 }
 
 _run_single_decompress_test() {
@@ -23,29 +21,20 @@ _run_single_decompress_test() {
   local remove_flag="$2"
   local label="$3"
 
-  local files=(
-    "source.txt"
-    "nested folder/bravo.sql"
-    "special chars/Ωmega (final).txt"
-  )
-  local sizes=(
-    $((96 * 1024))
-    $((48 * 1024))
-    $((32 * 1024))
-  )
-  local compressors=(
-    xz
-    zstd
-    zstd
-  )
+  # Use standard fixture with custom files for decompression testing
+  local -a files sizes compressors
+  files=("source.txt" "nested folder/bravo.sql" "special chars/Ωmega (final).txt")
+  sizes=(98304 49152 32768)
+  compressors=(xz zstd zstd)
 
   declare -A expected_paths compressed_paths
   for idx in "${!files[@]}"; do
     local path="${files[$idx]}"
     local compressor="${compressors[$idx]}"
+    local size="${sizes[$idx]}"
     local full_path="$tmpdir/$path"
     mkdir -p -- "$(dirname -- "$full_path")"
-    generate_test_file "$full_path" "${sizes[$idx]}" "Decompression payload $idx (${label})"
+    generate_test_file "$full_path" "$size" "Decompression payload $idx (${label})"
     expected_paths["$path"]="${full_path}.expected"
     cp -- "$full_path" "${expected_paths[$path]}"
 
@@ -92,8 +81,7 @@ _run_single_decompress_test() {
 }
 
 run_error_handling_test() {
-  log "Running decompress.sh error handling test"
-  run_test_with_tmpdir _run_error_handling_test
+  run_standard_test "decompress.sh error handling test" _run_error_handling_test
 }
 
 _run_error_handling_test() {
@@ -126,8 +114,7 @@ _run_error_handling_test() {
 }
 
 run_comprehensive_magic_detection_test() {
-  log "Running comprehensive magic format detection test"
-  run_test_with_tmpdir _run_comprehensive_magic_detection_test
+  run_standard_test "comprehensive magic format detection test" _run_comprehensive_magic_detection_test
 }
 
 _run_comprehensive_magic_detection_test() {
@@ -234,8 +221,7 @@ PY
 }
 
 run_all_compressors_error_test() {
-  log "Running error handling test for all compressors"
-  run_test_with_tmpdir _run_all_compressors_error_test
+  run_standard_test "error handling test for all compressors" _run_all_compressors_error_test
 }
 
 _run_all_compressors_error_test() {
@@ -286,8 +272,7 @@ _run_all_compressors_error_test() {
 }
 
 run_edge_cases_test() {
-  log "Running edge cases test"
-  run_test_with_tmpdir _run_edge_cases_test
+  run_standard_test "edge cases test" _run_edge_cases_test
 }
 
 _run_edge_cases_test() {
@@ -351,8 +336,7 @@ _run_edge_cases_test() {
 }
 
 run_magic_format_detection_test() {
-  log "Running decompress.sh magic format detection test"
-  run_test_with_tmpdir _run_magic_format_detection_test
+  run_standard_test "decompress.sh magic format detection test" _run_magic_format_detection_test
 }
 
 _run_magic_format_detection_test() {

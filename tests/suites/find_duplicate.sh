@@ -6,13 +6,11 @@ TEST_ROOT="$(cd "$SUITE_DIR/.." && pwd)"
 source "$TEST_ROOT/lib/common.sh"
 trap cleanup_tmpdirs EXIT
 
-run_find_duplicate_sha256_suite() {
-  log "Running find-duplicate-sha256.sh test"
+# Use new command group requirements
+require_basic_commands
 
-  local tmpdir
-  tmpdir="$(mktemp -d)"
-  TMP_DIRS+=("$tmpdir")
-
+_run_find_duplicate_sha256_test() {
+  local tmpdir="$1"
   local manifest_dir="$tmpdir/manifests"
   mkdir -p "$manifest_dir"
 
@@ -154,5 +152,5 @@ EOF
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
-  run_find_duplicate_sha256_suite "$@"
+  run_standard_test "find-duplicate-sha256.sh test" _run_find_duplicate_sha256_test
 fi

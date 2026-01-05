@@ -6,15 +6,13 @@ TEST_ROOT="$(cd "$SUITE_DIR/.." && pwd)"
 source "$TEST_ROOT/lib/common.sh"
 trap cleanup_tmpdirs EXIT
 
-require_cmd tar
-require_cmd pzstd
-require_cmd python3
-require_cmd sha256sum
+# Use new command group requirements
+require_basic_commands
+require_archive_commands
+require_parallel_commands
 
 run_create_tarzst_basic_test() {
-  log "Testing create-tarzst.sh basic functionality"
-
-  run_test_with_tmpdir _run_create_tarzst_basic_test
+  run_standard_test "create-tarzst.sh basic functionality" _run_create_tarzst_basic_test
 }
 
 _run_create_tarzst_basic_test() {
@@ -22,25 +20,17 @@ _run_create_tarzst_basic_test() {
   local input_dir="$tmpdir/input"
   mkdir -p "$input_dir"
 
-  local rel_paths=(
-    "alpha.txt"
-    "nested/bravo.bin"
-    "spaces/charlie data.csv"
-  )
-  local sizes=(
-    128
-    512
-    1024
-  )
+  # Use standard fixture for creation testing
+  local hash_output
+  hash_output="$(create_standard_fixture "$input_dir" "BASIC" "Create tarzst payload")"
 
+  # Parse hash output
   declare -A expected_hashes
-  for idx in "${!rel_paths[@]}"; do
-    local rel="${rel_paths[$idx]}"
-    local abs="$input_dir/$rel"
-    mkdir -p -- "$(dirname -- "$abs")"
-    generate_test_file "$abs" "${sizes[$idx]}" "Create tarzst payload $idx"
-    expected_hashes["$rel"]="$(sha256sum -- "$abs" | awk '{print $1}')"
-  done
+  local -a rel_paths
+  while IFS='=' read -r path hash; do
+    rel_paths+=("$path")
+    expected_hashes["$path"]="$hash"
+  done <<<"$hash_output"
 
   local output_tar_zst="$tmpdir/input.tar.zst"
   local script="$REPO_ROOT/create-tarzst.sh"
@@ -59,10 +49,11 @@ _run_create_tarzst_basic_test() {
 }
 
 run_create_tarzst_force_test() {
-  log "Testing create-tarzst.sh --force option"
+  run_standard_test "create-tarzst.sh --force option" _run_create_tarzst_force_test
+}
 
-  local tmpdir
-  tmpdir="$(mktemp -d)"
+_run_create_tarzst_force_test() {
+  local tmpdir="$1"
   TMP_DIRS+=("$tmpdir")
 
   local input_dir="$tmpdir/input"
@@ -191,9 +182,7 @@ run_create_tarzst_force_test() {
 }
 
 run_create_tarzst_sha256_test() {
-  log "Testing create-tarzst.sh with SHA256 manifest"
-
-  run_test_with_tmpdir _run_create_tarzst_sha256_test
+  run_standard_test "create-tarzst.sh with SHA256 manifest" _run_create_tarzst_sha256_test
 }
 
 _run_create_tarzst_sha256_test() {
@@ -201,23 +190,17 @@ _run_create_tarzst_sha256_test() {
   local input_dir="$tmpdir/input"
   mkdir -p "$input_dir"
 
-  local rel_paths=(
-    "file1.txt"
-    "subdir/file2.bin"
-  )
-  local sizes=(
-    256
-    768
-  )
+  # Use LARGE fixture for SHA256 testing
+  local hash_output
+  hash_output="$(create_standard_fixture "$input_dir" "LARGE" "SHA256 payload")"
 
+  # Parse hash output
   declare -A expected_hashes
-  for idx in "${!rel_paths[@]}"; do
-    local rel="${rel_paths[$idx]}"
-    local abs="$input_dir/$rel"
-    mkdir -p -- "$(dirname -- "$abs")"
-    generate_test_file "$abs" "${sizes[$idx]}" "SHA256 payload $idx"
-    expected_hashes["$rel"]="$(sha256sum -- "$abs" | awk '{print $1}')"
-  done
+  local -a rel_paths
+  while IFS='=' read -r path hash; do
+    rel_paths+=("$path")
+    expected_hashes["$path"]="$hash"
+  done <<<"$hash_output"
 
   local output_tar_zst="$tmpdir/output.tar.zst"
   local manifest="$tmpdir/output.sha256"

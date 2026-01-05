@@ -7,50 +7,31 @@ source "$TEST_ROOT/lib/common.sh"
 source "$TEST_ROOT/lib/zip.sh"
 trap cleanup_tmpdirs EXIT
 
-require_cmd python3
-require_cmd 7z
-require_cmd tar
+# Use new command group requirements
+require_basic_commands
+require_archive_commands
+require_compression_commands
+require_parallel_commands
 require_cmd pigz
 require_cmd pixz
 require_cmd pbzip2
-require_cmd zstd
-require_cmd zip
-require_cmd sha256sum
-require_cmd pzstd
-
-run_convert_to_tarzst_suite() {
-  log "Verifying convert-to-tarzst.sh handles 7z with SHA256 manifests"
-
-  run_test_with_tmpdir _run_convert_to_tarzst_suite
-
-  log "Testing convert-to-tarzst.sh with spaces in filenames and directories"
-  run_test_with_tmpdir _run_convert_to_tarzst_spaces_test
-}
 
 _run_convert_to_tarzst_suite() {
   local tmpdir="$1"
   local input_dir="$tmpdir/input"
   mkdir -p "$input_dir"
 
-  local rel_paths=(
-    "alpha.txt"
-    "nested/bravo.bin"
-    "spaces/charlie data.csv"
-  )
-  local sizes=(
-    128
-    512
-    1024
-  )
+  # Use standard fixture for conversion testing
+  local hash_output
+  hash_output="$(create_standard_fixture "$input_dir" "BASIC" "Convert 7z payload")"
 
+  # Parse hash output
   declare -A expected_hashes
-  for idx in "${!rel_paths[@]}"; do
-    local rel="${rel_paths[$idx]}"
-    local abs="$input_dir/$rel"
-    mkdir -p -- "$(dirname -- "$abs")"
-    generate_test_file "$abs" "${sizes[$idx]}" "Convert 7z payload $idx"
-    expected_hashes["$rel"]="$(sha256sum -- "$abs" | awk '{print $1}')"
-  done
+  local -a rel_paths
+  while IFS='=' read -r path hash; do
+    rel_paths+=("$path")
+    expected_hashes["$path"]="$hash"
+  done <<<"$hash_output"
 
   local archive="$tmpdir/sample.7z"
   (
@@ -235,24 +216,18 @@ _run_convert_to_tarzst_spaces_test() {
   local input_dir="$tmpdir/input"
   mkdir -p "$input_dir"
 
-  # Test cases with various space scenarios (avoiding tar normalization issues)
-  local rel_paths=(
-    "simple file.txt"
-    "folder with spaces/nested file.txt"
-    "deeply nested path with spaces/another file.dat"
-  )
-  local sizes=(
-    128
-    256
-    512
-  )
+  # Create custom fixture with spaces for testing
+  local -a rel_paths sizes
+  rel_paths=("simple file.txt" "folder with spaces/nested file.txt" "deeply nested path with spaces/another file.dat")
+  sizes=(128 256 512)
 
   declare -A expected_hashes
   for idx in "${!rel_paths[@]}"; do
     local rel="${rel_paths[$idx]}"
+    local size="${sizes[$idx]}"
     local abs="$input_dir/$rel"
     mkdir -p -- "$(dirname -- "$abs")"
-    generate_test_file "$abs" "${sizes[$idx]}" "Spaces test payload $idx"
+    generate_test_file "$abs" "$size" "Spaces test payload $idx"
     expected_hashes["$rel"]="$(sha256sum -- "$abs" | awk '{print $1}')"
   done
 
@@ -311,5 +286,6 @@ _run_convert_to_tarzst_spaces_test() {
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
-  run_convert_to_tarzst_suite "$@"
+  run_standard_test "convert-to-tarzst.sh with SHA256 manifests" _run_convert_to_tarzst_suite
+  run_standard_test "convert-to-tarzst.sh with spaces" _run_convert_to_tarzst_spaces_test
 fi
