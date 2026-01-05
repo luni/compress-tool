@@ -44,6 +44,7 @@ Options:
 
       --small TOOL        Small-file compressor: xz or zstd (default: xz)
       --big TOOL          Big-file compressor: pixz, xz, pzstd, or zstd (default: pixz)
+      --big-jobs N        Parallel jobs for big files (default: 1)
 
       --xz-level  -#      xz/pixz level (default: -5)
       --zstd-level -#     zstd level (default: -6)
