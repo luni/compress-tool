@@ -163,10 +163,10 @@ out_name() {
   local f="$1" algo="$2"
   case "$algo" in
     xz|pixz)
-      [[ "$f" == *.tar ]] && printf '%s\n' "${f%.tar}.txz" || printf '%s\n' "${f}.xz"
+      printf '%s\n' "${f}.xz"
       ;;
     zstd|pzstd)
-      [[ "$f" == *.tar ]] && printf '%s\n' "${f%.tar}.tzst" || printf '%s\n' "${f}.zst"
+      printf '%s\n' "${f}.zst"
       ;;
     *)
       echo "Unknown compressor: $algo" >&2
