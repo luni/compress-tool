@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-$0}")" && pwd)"
+# shellcheck source=common.sh
+source "${SCRIPT_DIR}/common.sh"
+
 usage() {
   cat <<'EOF'
 Usage:
@@ -26,11 +30,6 @@ Options:
 EOF
 }
 
-die() {
-  printf 'Error: %s\n' "$1" >&2
-  exit 2
-}
-
 require_tool() {
   command -v "$1" >/dev/null 2>&1 || die "Required tool '$1' is not on PATH."
 }
@@ -48,28 +47,6 @@ declare -A SIGNATURE_MANIFESTS=()
 declare -A MANIFEST_ENTRY_COUNTS=()
 declare -A HASH_MANIFEST_SEEN=()
 declare -A HASH_UNIQUE_MANIFEST_COUNT=()
-
-name_without_last_extension() {
-  local path="$1" name trimmed
-  name="$(basename -- "$path")"
-  trimmed="${name%.*}"
-  if [[ "$trimmed" == "$name" || -z "$trimmed" ]]; then
-    printf '%s\n' "$name"
-  else
-    printf '%s\n' "$trimmed"
-  fi
-}
-
-name_without_any_extension() {
-  local path="$1" name trimmed
-  name="$(basename -- "$path")"
-  trimmed="${name%%.*}"
-  if [[ "$trimmed" == "$name" || -z "$trimmed" ]]; then
-    printf '%s\n' "$name"
-  else
-    printf '%s\n' "$trimmed"
-  fi
-}
 
 collect_related_basename_files() {
   local manifest="$1" archive="$2" out_var="$3"
@@ -208,36 +185,6 @@ interactive_select_items() {
   done
 }
 
-confirm_delete_targets() {
-  local -a targets=("$@")
-  if (( AUTO_CONFIRM )); then
-    printf 'Auto-confirmed removal of the following %d item(s):\n' "${#targets[@]}"
-    for path in "${targets[@]}"; do
-      printf '  - %s\n' "$path"
-    done
-    return 0
-  fi
-
-  printf 'The following %d item(s) will be removed:\n' "${#targets[@]}"
-  for path in "${targets[@]}"; do
-    printf '  - %s\n' "$path"
-  done
-  printf 'Proceed? [y/N]: '
-  local reply
-  if ! read -r reply; then
-    return 1
-  fi
-  case "${reply,,}" in
-    y|yes)
-      return 0
-      ;;
-    *)
-      printf 'Skipping deletion.\n'
-      return 1
-      ;;
-  esac
-}
-
 delete_redundant_manifest() {
   local manifest="$1"
   local -a targets=()
@@ -248,7 +195,7 @@ delete_redundant_manifest() {
     return
   fi
 
-  if confirm_delete_targets "${targets[@]}"; then
+  if confirm_action "The following ${#targets[@]} item(s) will be removed:" "$AUTO_CONFIRM" "${targets[@]}"; then
     for path in "${targets[@]}"; do
       if rm -f -- "$path"; then
         printf 'Deleted %s\n' "$path"

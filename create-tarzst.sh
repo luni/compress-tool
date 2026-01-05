@@ -46,12 +46,6 @@ default_output_path() {
   printf '%s.tar.zst\n' "$base"
 }
 
-default_sha256_path() {
-  local dir="$1" base
-  base="$(basename -- "$dir")"
-  printf '%s.sha256\n' "$base"
-}
-
 write_sha256_manifest() {
   local root="$1" dest="$2" file rel hash
   [[ -z "$dest" ]] && return 0

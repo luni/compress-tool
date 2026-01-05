@@ -49,20 +49,9 @@ EOF
 }
 
 
-list_archive_files_7z() {
-  local archive="$1"
+parse_7z_listing() {
+  local listing_tmp="$1"
   local line path attrs started=0
-  local listing_tmp listing_output
-
-  listing_tmp="$(mktemp)"
-  if ! "$SEVENZ_BIN" l -slt -- "$archive" >"$listing_tmp" 2>&1; then
-    listing_output="$(cat "$listing_tmp")"
-    rm -f "$listing_tmp"
-    if [[ -n "$listing_output" ]]; then
-      printf '%s\n' "$listing_output" >&2
-    fi
-    die "Failed to list entries for $archive"
-  fi
 
   flush_entry() {
     if [[ -n "$path" && "$attrs" != *D* ]]; then
@@ -102,14 +91,41 @@ list_archive_files_7z() {
   flush_entry
 }
 
+list_archive_files_7z() {
+  local archive="$1"
+  local listing_tmp listing_output
 
-require_tar_filter_tool() {
-  case "$TAR_COMPRESSION" in
-    gz) require_cmd pigz ;;
-    bz2) require_cmd pbzip2 ;;
-    xz) require_cmd pixz ;;
-    zst) require_cmd pzstd ;;
-  esac
+  listing_tmp="$(mktemp)"
+  if ! "$SEVENZ_BIN" l -slt -- "$archive" >"$listing_tmp" 2>&1; then
+    listing_output="$(cat "$listing_tmp")"
+    rm -f "$listing_tmp"
+    if [[ -n "$listing_output" ]]; then
+      printf '%s\n' "$listing_output" >&2
+    fi
+    die "Failed to list entries for $archive"
+  fi
+
+  parse_7z_listing "$listing_tmp"
+}
+
+
+process_tar_archive() {
+  local archive="$1" entries_file="$2" command_file="$3"
+  local compression_cmd
+  compression_cmd="$(get_decompression_command "$TAR_COMPRESSION")"
+  if [[ "$compression_cmd" == "unknown" ]]; then
+    compression_cmd="cat"
+  fi
+
+  if [[ "$TAR_COMPRESSION" == "none" ]]; then
+    if ! tar --null --files-from="$entries_file" --to-command="$command_file" -xf "$archive"; then
+      die "Failed to process tar entries"
+    fi
+  else
+    if ! cat "$archive" | $compression_cmd | tar --null --files-from="$entries_file" --to-command="$command_file" -xf -; then
+      die "Failed to process tar entries"
+    fi
+  fi
 }
 
 tar_list_entries() {
@@ -167,8 +183,9 @@ list_archive_files_tar() {
 }
 
 list_archive_files_zip() {
-  local archive="$1" entry
+  local archive="$1"
   local listing_tmp
+
   listing_tmp="$(mktemp)"
   if ! "$SEVENZ_BIN" l -slt -- "$archive" >"$listing_tmp" 2>&1; then
     cat "$listing_tmp" >&2
@@ -176,44 +193,7 @@ list_archive_files_zip() {
     die "Failed to list zip entries for $archive"
   fi
 
-  # Parse 7z listing output similar to 7z format
-  local line path attrs started=0
-  flush_entry() {
-    if [[ -n "$path" && "$attrs" != *D* ]]; then
-      printf '%s\0' "$path"
-    fi
-    path=""
-    attrs=""
-  }
-
-  while IFS= read -r line; do
-    line="${line%$'\r'}"
-
-    if [[ "$line" == "----------" ]]; then
-      if [[ "$started" -eq 0 ]]; then
-        started=1
-      else
-        flush_entry
-      fi
-      continue
-    fi
-
-    [[ "$started" -eq 0 ]] && continue
-
-    if [[ -z "$line" ]]; then
-      flush_entry
-      continue
-    fi
-
-    if [[ "$line" == Path\ =\ * ]]; then
-      path="${line#Path = }"
-    elif [[ "$line" == Attributes\ =\ * ]]; then
-      attrs="${line#Attributes = }"
-    fi
-  done <"$listing_tmp"
-
-  rm -f "$listing_tmp"
-  flush_entry
+  parse_7z_listing "$listing_tmp"
 }
 
 list_archive_files_rar() {
@@ -305,6 +285,33 @@ SEVENZ_BIN="7z"
 TAR_COMPRESSION="none"
 ARCHIVE_PASSWORD="INVALID_PASSWORD"
 
+setup_archive_tools() {
+  case "$ARCHIVE_TYPE" in
+    zip|7z)
+      select_7z_tool
+      ;;
+    rar)
+      require_cmd unrar
+      ;;
+    tar|tar.gz|tar.xz|tar.bz2)
+      require_cmd tar
+      TAR_COMPRESSION="$(detect_tar_compression "$ARCHIVE")"
+      local filter_tool
+      filter_tool="$(get_decompression_command "$TAR_COMPRESSION")"
+      if [[ "$filter_tool" == "unknown" ]]; then
+        filter_tool="cat"
+      fi
+      filter_tool="$(echo "$filter_tool" | awk '{print $1}')"
+      if [[ "$filter_tool" != "cat" ]]; then
+        require_cmd "$filter_tool"
+      fi
+      ;;
+    *)
+      die "Archive type '$ARCHIVE_TYPE' is not supported."
+      ;;
+  esac
+}
+
 select_7z_tool() {
   if command -v 7z >/dev/null 2>&1; then
     SEVENZ_BIN="7z"
@@ -375,26 +382,7 @@ if [[ "$ARCHIVE_TYPE" == "unknown" ]]; then
   ARCHIVE_TYPE="7z"
 fi
 
-case "$ARCHIVE_TYPE" in
-  zip)
-    # ZIP files are handled by 7z, no need for unzip
-    select_7z_tool
-    ;;
-  rar)
-    require_cmd unrar
-    ;;
-  tar|tar.gz|tar.xz|tar.bz2)
-    require_cmd tar
-    TAR_COMPRESSION="$(detect_tar_compression "$ARCHIVE")"
-    require_tar_filter_tool
-    ;;
-  7z)
-    select_7z_tool
-    ;;
-  *)
-    die "Archive type '$ARCHIVE_TYPE' is not supported."
-    ;;
-esac
+setup_archive_tools
 require_cmd sha256sum
 
 if [[ -z "$OUTPUT_FILE" ]]; then
@@ -414,9 +402,9 @@ trap cleanup EXIT
 
 log "Writing SHA-256 manifest to $OUTPUT_FILE"
 
-files_processed=0
 # Optimization for tar files - process all entries in a single decompression pass
 if [[ "$ARCHIVE_TYPE" == "tar" || "$ARCHIVE_TYPE" == "tar.gz" || "$ARCHIVE_TYPE" == "tar.xz" || "$ARCHIVE_TYPE" == "tar.bz2" ]]; then
+  files_processed=0
   log "Using optimized tar processing"
   tmp_tar_entries="$(mktemp)"
   if ! list_archive_files "$ARCHIVE" >"$tmp_tar_entries"; then
@@ -445,36 +433,11 @@ EOF
     chmod +x "$tmp_tar_command"
 
     log "Processing $files_processed file(s) in a single pass"
-    case "$TAR_COMPRESSION" in
-      gz)
-        if ! pigz -dc -- "$ARCHIVE" | tar --null --files-from="$tmp_tar_entries" --to-command="$tmp_tar_command" -xf -; then
-          die "Failed to process tar entries"
-        fi
-        ;;
-      bz2)
-        if ! pbzip2 -dc -- "$ARCHIVE" | tar --null --files-from="$tmp_tar_entries" --to-command="$tmp_tar_command" -xf -; then
-          die "Failed to process tar entries"
-        fi
-        ;;
-      xz)
-        if ! pixz -d -c -- "$ARCHIVE" | tar --null --files-from="$tmp_tar_entries" --to-command="$tmp_tar_command" -xf -; then
-          die "Failed to process tar entries"
-        fi
-        ;;
-      zst)
-        if ! pzstd -d -q -c -- "$ARCHIVE" | tar --null --files-from="$tmp_tar_entries" --to-command="$tmp_tar_command" -xf -; then
-          die "Failed to process tar entries"
-        fi
-        ;;
-      none)
-        if ! tar --null --files-from="$tmp_tar_entries" --to-command="$tmp_tar_command" -xf "$ARCHIVE"; then
-          die "Failed to process tar entries"
-        fi
-        ;;
-    esac
+    process_tar_archive "$ARCHIVE" "$tmp_tar_entries" "$tmp_tar_command"
   fi
 else
   # Fallback processing for archive types without streaming optimizations
+  files_processed=0
   tmp_entries_list="$(mktemp)"
   if ! list_archive_files "$ARCHIVE" >"$tmp_entries_list"; then
     rm -f "$tmp_entries_list"

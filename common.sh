@@ -113,6 +113,123 @@ detect_tar_compression() {
   esac
 }
 
+get_compression_extension() {
+  local algo="$1"
+  case "$algo" in
+    xz|pixz) echo "xz" ;;
+    zstd|pzstd) echo "zst" ;;
+    *) echo "unknown" ;;
+  esac
+}
+
+get_decompression_command() {
+  local compressor="$1"
+  case "$compressor" in
+    gz)
+      echo "pigz -dc"
+      ;;
+    bz2)
+      echo "pbzip2 -dc"
+      ;;
+    xz)
+      echo "pixz -d"
+      ;;
+    zst)
+      echo "pzstd -d -q -c"
+      ;;
+    cat)
+      echo "cat"
+      ;;
+    *)
+      echo "unknown"
+      ;;
+  esac
+}
+
+get_compressor_command() {
+  local compressor="$1"
+  case "$compressor" in
+    xz)
+      echo "xz $XZ_LEVEL -T1 -c --"
+      ;;
+    zstd)
+      echo "zstd $ZSTD_LEVEL -T1 -q -c --"
+      ;;
+    pixz)
+      echo "pixz $XZ_LEVEL"
+      ;;
+    xz_big)
+      echo "xz $XZ_LEVEL -c"
+      ;;
+    pzstd)
+      echo "pzstd $PZSTD_LEVEL"
+      ;;
+    zstd_big)
+      echo "zstd $ZSTD_LEVEL -q -c"
+      ;;
+    *)
+      echo "unknown"
+      ;;
+  esac
+}
+
+basename_without_extension() {
+  local path="$1" mode="${2:-last}"
+  local name trimmed
+  name="$(basename -- "$path")"
+
+  case "$mode" in
+    last)
+      trimmed="${name%.*}"
+      ;;
+    any)
+      trimmed="${name%%.*}"
+      ;;
+    *)
+      die "Invalid mode for basename_without_extension: $mode"
+      ;;
+  esac
+
+  if [[ "$trimmed" == "$name" || -z "$trimmed" ]]; then
+    printf '%s\n' "$name"
+  else
+    printf '%s\n' "$trimmed"
+  fi
+}
+
+confirm_action() {
+  local prompt="$1" auto_confirm="$2" shift 2
+  local -a items=("$@")
+
+  if (( auto_confirm )); then
+    printf 'Auto-confirmed: %s\n' "$prompt"
+    for item in "${items[@]}"; do
+      printf '  - %s\n' "$item"
+    done
+    return 0
+  fi
+
+  printf '%s\n' "$prompt"
+  printf 'The following %d item(s) will be affected:\n' "${#items[@]}"
+  for item in "${items[@]}"; do
+    printf '  - %s\n' "$item"
+  done
+  printf 'Proceed? [y/N]: '
+  local reply
+  if ! read -r reply; then
+    return 1
+  fi
+  case "${reply,,}" in
+    y|yes)
+      return 0
+      ;;
+    *)
+      printf 'Action cancelled.\n'
+      return 1
+      ;;
+  esac
+}
+
 detect_actual_format() {
   local file="$1" file_output
   file_output="$(file --brief --mime-type "$file" 2>/dev/null || file --brief "$file" 2>/dev/null || echo "unknown")"

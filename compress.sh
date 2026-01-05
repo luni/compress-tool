@@ -164,18 +164,13 @@ skip_if_already_compressed() {
 
 out_name() {
   local f="$1" algo="$2"
-  case "$algo" in
-    xz|pixz)
-      printf '%s\n' "${f}.xz"
-      ;;
-    zstd|pzstd)
-      printf '%s\n' "${f}.zst"
-      ;;
-    *)
-      echo "Unknown compressor: $algo" >&2
-      return 2
-      ;;
-  esac
+  local ext
+  ext="$(get_compression_extension "$algo")"
+  if [[ "$ext" == "unknown" ]]; then
+    echo "Unknown compressor: $algo" >&2
+    return 2
+  fi
+  printf '%s\n' "${f}.${ext}"
 }
 
 compress_small() {
@@ -194,25 +189,18 @@ compress_small() {
   [[ -n "${SHA256_FILE:-}" ]] && sha256_tmp="$(mktemp)"
 
   local -a read_cmd=(cat -- "$f")
-  local -a compress_cmd=()
+  local compress_cmd_str
 
   log "small(${SMALL_COMPRESSOR}): $f -> $out"
 
-  case "$SMALL_COMPRESSOR" in
-    xz)
-      compress_cmd=(xz "$XZ_LEVEL" -T1 -c --)
-      ;;
-    zstd)
-      compress_cmd=(zstd "$ZSTD_LEVEL" -T1 -q -c --)
-      ;;
-    *)
-      echo "SMALL_COMPRESSOR must be xz or zstd" >&2
-      rm -f -- "$tmp"
-      [[ -n "$sha1_tmp" ]] && rm -f -- "$sha1_tmp"
-      [[ -n "$sha256_tmp" ]] && rm -f -- "$sha256_tmp"
-      return 2
-      ;;
-  esac
+  compress_cmd_str=$(get_compressor_command "$SMALL_COMPRESSOR" compress)
+  if [[ "$compress_cmd_str" == "unknown" ]]; then
+    echo "SMALL_COMPRESSOR must be xz or zstd" >&2
+    rm -f -- "$tmp"
+    [[ -n "$sha1_tmp" ]] && rm -f -- "$sha1_tmp"
+    [[ -n "$sha256_tmp" ]] && rm -f -- "$sha256_tmp"
+    return 2
+  fi
 
   local pipeline_failed=0
   if [[ -n "$sha1_tmp" || -n "$sha256_tmp" ]]; then
@@ -220,24 +208,24 @@ compress_small() {
       if ! "${read_cmd[@]}" \
         | tee >(sha1sum | awk -v path="$f" '{printf "%s  %s\n", $1, path}' >"$sha1_tmp") \
               >(sha256sum | awk -v path="$f" '{printf "%s  %s\n", $1, path}' >"$sha256_tmp") \
-        | "${compress_cmd[@]}" >"$tmp"; then
+        | $compress_cmd_str >"$tmp"; then
         pipeline_failed=1
       fi
     elif [[ -n "$sha1_tmp" ]]; then
       if ! "${read_cmd[@]}" \
         | tee >(sha1sum | awk -v path="$f" '{printf "%s  %s\n", $1, path}' >"$sha1_tmp") \
-        | "${compress_cmd[@]}" >"$tmp"; then
+        | $compress_cmd_str >"$tmp"; then
         pipeline_failed=1
       fi
     else
       if ! "${read_cmd[@]}" \
         | tee >(sha256sum | awk -v path="$f" '{printf "%s  %s\n", $1, path}' >"$sha256_tmp") \
-        | "${compress_cmd[@]}" >"$tmp"; then
+        | $compress_cmd_str >"$tmp"; then
         pipeline_failed=1
       fi
     fi
   else
-    if ! "${read_cmd[@]}" | "${compress_cmd[@]}" >"$tmp"; then
+    if ! "${read_cmd[@]}" | $compress_cmd_str >"$tmp"; then
       pipeline_failed=1
     fi
   fi
@@ -281,31 +269,18 @@ compress_big_seq() {
   [[ -n "$SHA256_FILE" ]] && sha256_tmp="$(mktemp)"
 
   local -a read_cmd=(pv -ptebar -N "$f" -- "$f")
-  local -a compress_cmd=()
 
   log "big(${BIG_COMPRESSOR}): $f -> $out"
 
-  case "$BIG_COMPRESSOR" in
-    pixz)
-      compress_cmd=(pixz "$XZ_LEVEL")
-      ;;
-    xz)
-      compress_cmd=(xz "$XZ_LEVEL" -c)
-      ;;
-    pzstd)
-      compress_cmd=(pzstd "$PZSTD_LEVEL")
-      ;;
-    zstd)
-      compress_cmd=(zstd "$ZSTD_LEVEL" -q -c)
-      ;;
-    *)
-      echo "BIG_COMPRESSOR must be pixz, xz, pzstd, or zstd" >&2
-      rm -f -- "$tmp"
-      [[ -n "$sha1_tmp" ]] && rm -f -- "$sha1_tmp"
-      [[ -n "$sha256_tmp" ]] && rm -f -- "$sha256_tmp"
-      return 2
-      ;;
-  esac
+  local compress_cmd_str
+  compress_cmd_str=$(get_compressor_command "$BIG_COMPRESSOR" compress)
+  if [[ "$compress_cmd_str" == "unknown" ]]; then
+    echo "BIG_COMPRESSOR must be pixz, xz, pzstd, or zstd" >&2
+    rm -f -- "$tmp"
+    [[ -n "$sha1_tmp" ]] && rm -f -- "$sha1_tmp"
+    [[ -n "$sha256_tmp" ]] && rm -f -- "$sha256_tmp"
+    return 2
+  fi
 
   local pipeline_failed=0
   if [[ -n "$sha1_tmp" || -n "$sha256_tmp" ]]; then
@@ -313,24 +288,24 @@ compress_big_seq() {
       if ! "${read_cmd[@]}" \
         | tee >(sha1sum | awk -v path="$f" '{printf "%s  %s\n", $1, path}' >"$sha1_tmp") \
               >(sha256sum | awk -v path="$f" '{printf "%s  %s\n", $1, path}' >"$sha256_tmp") \
-        | "${compress_cmd[@]}" >"$tmp"; then
+        | $compress_cmd_str >"$tmp"; then
         pipeline_failed=1
       fi
     elif [[ -n "$sha1_tmp" ]]; then
       if ! "${read_cmd[@]}" \
         | tee >(sha1sum | awk -v path="$f" '{printf "%s  %s\n", $1, path}' >"$sha1_tmp") \
-        | "${compress_cmd[@]}" >"$tmp"; then
+        | $compress_cmd_str >"$tmp"; then
         pipeline_failed=1
       fi
     else
       if ! "${read_cmd[@]}" \
         | tee >(sha256sum | awk -v path="$f" '{printf "%s  %s\n", $1, path}' >"$sha256_tmp") \
-        | "${compress_cmd[@]}" >"$tmp"; then
+        | $compress_cmd_str >"$tmp"; then
         pipeline_failed=1
       fi
     fi
   else
-    if ! "${read_cmd[@]}" | "${compress_cmd[@]}" >"$tmp"; then
+    if ! "${read_cmd[@]}" | $compress_cmd_str >"$tmp"; then
       pipeline_failed=1
     fi
   fi
@@ -359,7 +334,7 @@ compress_big_seq() {
   [[ -n "$sha256_line" ]] && append_checksum_line sha256 "$sha256_line"
 }
 
-export -f compress_small compress_big_seq out_name emit_checksum_lines append_checksum_line log skip_if_already_compressed detect_actual_format get_expected_extension
+export -f compress_small compress_big_seq out_name emit_checksum_lines append_checksum_line log skip_if_already_compressed detect_actual_format get_expected_extension get_compression_extension get_compressor_command
 export SMALL_COMPRESSOR BIG_COMPRESSOR BIG_JOBS XZ_LEVEL ZSTD_LEVEL PZSTD_LEVEL QUIET SHA1_FILE SHA256_FILE CHECKSUM_DELIM REMOVE_SOURCE
 
 small_list="$(mktemp)"

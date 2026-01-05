@@ -59,23 +59,15 @@ tar_list_entries() {
 
   run_tar_list() {
     local tar_base=(tar --quoting-style=literal --show-transformed-names -tf)
-    case "$compression" in
-      gz)
-        require_cmd gzip
-        gzip -dc -- "$archive" | "${tar_base[@]}" -
-        ;;
-      bz2)
-        require_cmd bzip2
-        bzip2 -dc -- "$archive" | "${tar_base[@]}" -
-        ;;
-      xz)
-        require_cmd xz
-        xz -dc -- "$archive" | "${tar_base[@]}" -
-        ;;
-      none)
-        "${tar_base[@]}" "$archive"
-        ;;
-    esac
+    local decompress_cmd
+    decompress_cmd="$(get_decompression_command "$compression")"
+    if [[ "$compression" == "none" ]]; then
+      "${tar_base[@]}" "$archive"
+    else
+      if ! cat "$archive" | $decompress_cmd | "${tar_base[@]}" -; then
+        return 1
+      fi
+    fi
   }
 
   if ! run_tar_list >"$dest" 2>&1; then
@@ -126,14 +118,10 @@ EOF
   export TMP_MANIFEST="$tmp_manifest"
 
   case "$compression" in
-    gz)
-      gzip -dc -- "$archive" | tar --null --files-from="$tmp_files" --to-command="$tmp_command" -xf - 2>/dev/null || true
-      ;;
-    bz2)
-      bzip2 -dc -- "$archive" | tar --null --files-from="$tmp_files" --to-command="$tmp_command" -xf - 2>/dev/null || true
-      ;;
-    xz)
-      xz -dc -- "$archive" | tar --null --files-from="$tmp_files" --to-command="$tmp_command" -xf - 2>/dev/null || true
+    gz|bz2|xz)
+      local decompress_cmd
+      decompress_cmd="$(get_decompression_command "$compression")"
+      cat "$archive" | $decompress_cmd | tar --null --files-from="$tmp_files" --to-command="$tmp_command" -xf - 2>/dev/null || true
       ;;
     none)
       tar --null --files-from="$tmp_files" --to-command="$tmp_command" -xf "$archive" 2>/dev/null || true
