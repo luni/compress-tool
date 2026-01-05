@@ -53,11 +53,28 @@ restore_mtime() {
 }
 
 # Archive type detection
+is_split_archive() {
+  local archive="$1"
+  local lowered="${archive,,}"
+  [[ "$lowered" =~ \.(7z|zip|rar)\.[0-9]+$ ]] ||
+  [[ "$lowered" =~ \.part[0-9]+\.rar$ ]] ||
+  [[ "$lowered" =~ \.r[0-9]+$ ]]
+}
+
+is_first_chunk() {
+  local archive="$1"
+  local lowered="${archive,,}"
+  case "$lowered" in
+    *.001|*.part01.rar|*.part1.rar|*.r01) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 detect_archive_type() {
   local archive="$1"
   local lowered="${archive,,}"
   case "$lowered" in
-    *.7z)
+    *.7z|*.7z.001)
       printf '7z'
       ;;
     *.tar.gz|*.tgz)
@@ -72,10 +89,10 @@ detect_archive_type() {
     *.tar|*.tar.*|*.tgz|*.tbz|*.tbz2|*.txz|*.tlz|*.taz|*.tar.gz|*.tar.xz|*.tar.zst|*.tar.bz2|*.tzst)
       printf 'tar'
       ;;
-    *.zip)
+    *.zip|*.zip.001|*.z01)
       printf 'zip'
       ;;
-    *.rar)
+    *.rar|*.rar.001|*.part[0-9][0-9].rar|*.part[0-9][0-9][0-9].rar)
       printf 'rar'
       ;;
     *)
@@ -145,9 +162,9 @@ get_expected_extension() {
     *.txz) echo "xz" ;;
     *.tzst) echo "zst" ;;
     *.tbz|*.tbz2) echo "bz2" ;;
-    *.zip) echo "zip" ;;
-    *.rar) echo "rar" ;;
-    *.7z) echo "7z" ;;
+    *.zip|*.zip.001|*.z01) echo "zip" ;;
+    *.rar|*.rar.001|*.part[0-9][0-9].rar|*.part[0-9][0-9][0-9].rar) echo "rar" ;;
+    *.7z|*.7z.001) echo "7z" ;;
     *) echo "unknown" ;;
   esac
 }
@@ -232,6 +249,26 @@ strip_archive_suffixes() {
         ;;
       *.tgz|*.txz|*.tbz|*.tbz2|*.tzst|*.tlz|*.taz)
         name="${name%.*}"
+        ;;
+      *.7z.0[0-9][0-9])
+        name="${name%.*}"
+        ;;
+      *.zip.0[0-9][0-9])
+        name="${name%.*}"
+        ;;
+      *.z[0-9][0-9])
+        name="${name%.*}"
+        ;;
+      *.rar.0[0-9][0-9])
+        name="${name%.*}"
+        ;;
+      *.r[0-9][0-9])
+        name="${name%.*}"
+        ;;
+      *.part[0-9].rar|*.part[0-9][0-9].rar|*.part[0-9][0-9][0-9].rar)
+        name="${name%.part[0-9].rar}"
+        name="${name%.part[0-9][0-9].rar}"
+        name="${name%.part[0-9][0-9][0-9].rar}"
         ;;
       *.7z|*.zip|*.rar)
         name="${name%.*}"

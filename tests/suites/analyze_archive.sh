@@ -25,7 +25,7 @@ _run_analyze_archive_case() {
   local archive_type="$2"
   local LC_ALL=C
   local input_dir="$tmpdir/input"
-  local archive
+  local archive split_second_chunk=""
   local expected_log=""
   mkdir -p "$input_dir"
 
@@ -64,6 +64,14 @@ _run_analyze_archive_case() {
         7z a -bd -y "$archive" "${rel_paths[@]}" >/dev/null
       )
       ;;
+    7z_split)
+      archive="$tmpdir/sample.7z.001"
+      (
+        cd "$input_dir"
+        7z a -bd -y -v1k "$tmpdir/sample.7z" "${rel_paths[@]}" >/dev/null
+      )
+      split_second_chunk="$tmpdir/sample.7z.002"
+      ;;
     zip)
       archive="$tmpdir/sample.zip"
       (
@@ -71,13 +79,62 @@ _run_analyze_archive_case() {
         zip -q "$archive" "${rel_paths[@]}"
       )
       ;;
+    zip_split)
+      archive="$tmpdir/sample.zip.001"
+      (
+        cd "$input_dir"
+        7z a -bd -y -tzip -v1k "$tmpdir/sample.zip" "${rel_paths[@]}" >/dev/null
+      )
+      split_second_chunk="$tmpdir/sample.zip.002"
+      ;;
     rar)
       archive="$tmpdir/sample.rar"
       (
         cd "$input_dir"
         # Use -r to recurse and preserve directory structure
-        rar a -r "$archive" . >/dev/null
+        rar a -m0 -r "$archive" . >/dev/null
       )
+      ;;
+    rar_split)
+      (
+        cd "$input_dir"
+        # Use -r to recurse and preserve directory structure
+        # Use volume size that forces splitting but keeps all files in first chunk
+        rar a -m0 -r -v7k "$tmpdir/sample.rar" . >/dev/null
+      )
+      local rar_chunks_raw=()
+      local rar_chunks=()
+      local nullglob_was_on=0
+      if shopt -q nullglob; then
+        nullglob_was_on=1
+      else
+        shopt -s nullglob
+      fi
+      rar_chunks_raw+=( "$tmpdir"/sample.part*.rar )
+      rar_chunks_raw+=( "$tmpdir"/sample.r[0-9][0-9] )
+      rar_chunks_raw+=( "$tmpdir"/sample.r[0-9][0-9][0-9] )
+      if [[ $nullglob_was_on -eq 0 ]]; then
+        shopt -u nullglob
+      fi
+      if [[ -f "$tmpdir/sample.rar" ]]; then
+        rar_chunks_raw+=( "$tmpdir/sample.rar" )
+      fi
+      declare -A rar_seen=()
+      for candidate in "${rar_chunks_raw[@]}"; do
+        [[ -e "$candidate" ]] || continue
+        if [[ -z "${rar_seen[$candidate]:-}" ]]; then
+          rar_seen["$candidate"]=1
+          rar_chunks+=("$candidate")
+        fi
+      done
+      if [[ "${#rar_chunks[@]}" -lt 2 ]]; then
+        echo "Failed to create expected split RAR chunks" >&2
+        ls -al "$tmpdir" >&2 || true
+        return 1
+      fi
+      IFS=$'\n' read -r -d '' -a rar_chunks < <(printf '%s\n' "${rar_chunks[@]}" | LC_ALL=C sort && printf '\0')
+      archive="${rar_chunks[0]}"
+      split_second_chunk="${rar_chunks[1]}"
       ;;
     *)
       echo "Unknown archive type for analyze-archive test: $archive_type" >&2
@@ -143,6 +200,29 @@ _run_analyze_archive_case() {
       return 1
     fi
   done
+
+  if [[ -n "$split_second_chunk" && -f "$split_second_chunk" ]]; then
+    local nonfirst_log="$tmpdir/nonfirst-${archive_type}.log"
+    if "$REPO_ROOT/analyze-archive.sh" "$split_second_chunk" >"$nonfirst_log" 2>&1; then
+      echo "analyze-archive.sh unexpectedly processed non-first split chunk (${archive_type}): $split_second_chunk" >&2
+      cat "$nonfirst_log" >&2
+      return 1
+    fi
+
+    local output_nonfirst
+    output_nonfirst="$(cat "$nonfirst_log")"
+    if [[ "$output_nonfirst" != *"Failed to list entries for $split_second_chunk"* ]]; then
+      echo "Expected failure when analyzing non-first split chunk (${archive_type})" >&2
+      echo "$output_nonfirst" >&2
+      return 1
+    fi
+
+    local nonfirst_manifest="${split_second_chunk%.*}.sha256"
+    if [[ -e "$nonfirst_manifest" ]]; then
+      echo "Manifest should not be created for non-first split chunk (${archive_type})" >&2
+      return 1
+    fi
+  fi
 
   local manifest_backup="$tmpdir/sample.sha256.expected"
   cp -- "$manifest" "$manifest_backup"
@@ -375,8 +455,11 @@ _run_analyze_archive_password_protected_zip() {
 run_analyze_archive_suite() {
   run_analyze_archive_case tar
   run_analyze_archive_case 7z
+  run_analyze_archive_case 7z_split
+  run_analyze_archive_case zip_split
   run_analyze_archive_case zip
   run_analyze_archive_case rar
+  run_analyze_archive_case rar_split
   run_analyze_archive_invalid_cases
   run_analyze_archive_password_protected
   run_analyze_archive_password_protected_zip
