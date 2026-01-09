@@ -1,0 +1,89 @@
+[project]
+name = "torrent-compress-recovery"
+version = "0.1.0"
+description = "Recover compressed files from a torrent by searching raw and partial-download folders"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["bencodepy"]
+
+[project.scripts]
+torrent-compress-recovery = "torrent_compress_recovery.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+dev-dependencies = [
+    "ruff",
+    "pytest",
+]
+
+[tool.ruff]
+line-length = 160
+indent-width = 4
+target-version = "py310"
+
+[tool.ruff.lint]
+preview = true
+explicit-preview-rules = true
+extend-select = [
+    "ANN",
+    "UP",
+    "UP042",
+    "I"
+]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+    "N",   # pep8-naming
+    "PL",  # pylint
+    "RUF", # ruff-specific rules
+]
+
+ignore = ["D203", "D213", "D100", "F821"]  # Ignore specific docstring rules
+
+
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[dependency-groups]
+dev = [
+    "bandit[toml]>=1.7.5",
+    "ruff>=0.13.3",
+    "pytest>=8.0.0",
+    "pytest-cov>=4.0.0",
+    "pyright>=1.1.407",
+    "vulture>=2.14",
+    "xenon>=0.9.3",
+]
+
+[tool.pyright]
+exclude = ["**/__pycache__", "**/node_modules", "**/dist", "**/build", "**/venv", "**/.venv", "**/tests"]
+
+[tool.bandit]
+exclude_dirs = [".venv", "tests"]
+skips = ["B324"]  # SHA1 is mandated by the torrent spec
+
+
+[tool.vulture]
+exclude = ["dist", "build", "venv", ".venv", "tests"]
+ignore_decorators = ["@app.route", "@require_*"]
+ignore_names = ["visit_*", "do_*"]
+# make_whitelist = true
+min_confidence = 80
+paths = ["."]
+sort_by_size = true
+
+[tool.pytest.ini_options]
+addopts = [
+    "--import-mode=importlib",
+    "--cov=torrent_compress_recovery",
+    "--cov-report=term-missing",
+]
+pythonpath = ["."]
