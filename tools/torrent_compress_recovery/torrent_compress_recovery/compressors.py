@@ -3,6 +3,7 @@
 import bz2
 import gzip
 import shutil
+import subprocess  # nosec B404
 from abc import ABC, abstractmethod
 from pathlib import Path
 
@@ -52,10 +53,64 @@ class Bzip2Compressor(Compressor):
                 f_out.write(bz2.compress(f_in.read()))
 
 
+class XzCompressor(Compressor):
+    """xz compressor."""
+
+    @property
+    def extension(self) -> str:
+        return ".xz"
+
+    def compress(self, src: Path, dst: Path, dry_run: bool) -> None:
+        if dry_run:
+            return
+        dst.parent.mkdir(parents=True, exist_ok=True)
+
+        # Try xz command first, then fallback to pixz
+        for tool in ["xz", "pixz"]:
+            try:
+                cmd = [tool, "-c", str(src)]
+                proc = subprocess.run(cmd, check=True, capture_output=True)  # nosec B603
+                dst.write_bytes(proc.stdout)
+                return
+            except (FileNotFoundError, subprocess.CalledProcessError):
+                continue
+
+        # If both tools fail, raise an error
+        raise RuntimeError("Neither xz nor pixz is available")
+
+
+class ZstdCompressor(Compressor):
+    """zstd compressor."""
+
+    @property
+    def extension(self) -> str:
+        return ".zst"
+
+    def compress(self, src: Path, dst: Path, dry_run: bool) -> None:
+        if dry_run:
+            return
+        dst.parent.mkdir(parents=True, exist_ok=True)
+
+        # Try zstd command first, then fallback to pzstd
+        for tool in ["zstd", "pzstd"]:
+            try:
+                cmd = [tool, "-c", str(src)]
+                proc = subprocess.run(cmd, check=True, capture_output=True)  # nosec B603
+                dst.write_bytes(proc.stdout)
+                return
+            except (FileNotFoundError, subprocess.CalledProcessError):
+                continue
+
+        # If both tools fail, raise an error
+        raise RuntimeError("Neither zstd nor pzstd is available")
+
+
 # Registry of compressors
 _COMPRESSORS: dict[str, type[Compressor]] = {
     ".gz": GzipCompressor,
     ".bz2": Bzip2Compressor,
+    ".xz": XzCompressor,
+    ".zst": ZstdCompressor,
 }
 
 

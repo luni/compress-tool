@@ -53,6 +53,8 @@ class Result:
     recovered: int
     gzipped: int
     bzipped: int
+    xzipped: int
+    zstipped: int
     skipped: int
     missing: int
 
@@ -63,8 +65,8 @@ def _should_skip_file(tf, dst: Path, overwrite: bool) -> bool:
     if tf.attr and "p" in tf.attr:
         return True
 
-    # Handle .gz and .bz2 files (skip symlinks and other files)
-    if not (tf.rel_path.endswith(".gz") or tf.rel_path.endswith(".bz2")):
+    # Handle .gz, .bz2, .xz, and .zst files (skip symlinks and other files)
+    if not (tf.rel_path.endswith((".gz", ".bz2", ".xz", ".zst"))):
         return True
 
     # Skip if destination exists and overwrite is False
@@ -91,6 +93,10 @@ def _extract_raw_name(expected_name: str, rel_path: str) -> str:
                 return without_bz2[:-5]  # Remove .pbzX
         else:
             return without_bz2
+    elif rel_path.endswith(".xz"):
+        return expected_name[: -len(".xz")]
+    elif rel_path.endswith(".zst"):
+        return expected_name[: -len(".zst")]
     else:
         return expected_name
 
@@ -136,10 +142,20 @@ def _parse_header_from_partial(tf, expected_name: str, partial_index, is_gz: boo
         from .gzip import parse_gzip_header
 
         return parse_gzip_header(chosen)
-    else:
+    elif tf.rel_path.endswith(".bz2"):
         from .bz2 import parse_bzip2_header
 
         return parse_bzip2_header(chosen)
+    elif tf.rel_path.endswith(".xz"):
+        from .xz import parse_xz_header
+
+        return parse_xz_header(chosen)
+    elif tf.rel_path.endswith(".zst"):
+        from .zst import parse_zstd_header
+
+        return parse_zstd_header(chosen)
+    else:
+        return None
 
 
 def _try_sha1_match(
@@ -161,11 +177,23 @@ def _try_sha1_match(
 
                     candidates = generate_gzip_candidates(raw_path, header)
                     match_func = find_gzip_candidate
-                else:
+                elif tf.rel_path.endswith(".bz2"):
                     from .bz2 import generate_bzip2_candidates, find_matching_candidate
 
                     candidates = generate_bzip2_candidates(raw_path, header)
                     match_func = find_matching_candidate
+                elif tf.rel_path.endswith(".xz"):
+                    from .xz import generate_xz_candidates, find_matching_candidate
+
+                    candidates = generate_xz_candidates(raw_path, header)
+                    match_func = find_matching_candidate
+                elif tf.rel_path.endswith(".zst"):
+                    from .zst import generate_zstd_candidates, find_matching_candidate
+
+                    candidates = generate_zstd_candidates(raw_path, header)
+                    match_func = find_matching_candidate
+                else:
+                    return False, 0
 
                 match = match_func(candidates, target_piece_hash, piece_length, hash_algo)
                 if match:
@@ -175,7 +203,16 @@ def _try_sha1_match(
                     dst.parent.mkdir(parents=True, exist_ok=True)
                     if not dry_run:
                         dst.write_bytes(data)
-                    return True, (1 if is_gz else 0)  # gzipped or bzipped
+
+                    # Return appropriate counter
+                    if is_gz:
+                        return True, 1  # gzipped
+                    elif tf.rel_path.endswith(".bz2"):
+                        return True, 1  # bzipped
+                    elif tf.rel_path.endswith(".xz"):
+                        return True, 1  # xzipped
+                    elif tf.rel_path.endswith(".zst"):
+                        return True, 1  # zstipped
     return False, 0
 
 
@@ -194,11 +231,23 @@ def _try_brute_force_recovery(
 
         candidates = generate_gzip_candidates(raw_src, header)
         match_func = find_gzip_candidate
-    else:
+    elif tf.rel_path.endswith(".bz2"):
         from .bz2 import generate_bzip2_candidates, find_matching_candidate
 
         candidates = generate_bzip2_candidates(raw_src, header)
         match_func = find_matching_candidate
+    elif tf.rel_path.endswith(".xz"):
+        from .xz import generate_xz_candidates, find_matching_candidate
+
+        candidates = generate_xz_candidates(raw_src, header)
+        match_func = find_matching_candidate
+    elif tf.rel_path.endswith(".zst"):
+        from .zst import generate_zstd_candidates, find_matching_candidate
+
+        candidates = generate_zstd_candidates(raw_src, header)
+        match_func = find_matching_candidate
+    else:
+        return False, 0
 
     match = match_func(candidates, target_piece_hash, piece_length, hash_algo)
     if match is None:
@@ -211,7 +260,17 @@ def _try_brute_force_recovery(
     if not dry_run:
         dst.write_bytes(data)
 
-    return True, (1 if is_gz else 0)  # gzipped or bzipped
+    # Return appropriate counter
+    if is_gz:
+        return True, 1  # gzipped
+    elif tf.rel_path.endswith(".bz2"):
+        return True, 1  # bzipped
+    elif tf.rel_path.endswith(".xz"):
+        return True, 1  # xzipped
+    elif tf.rel_path.endswith(".zst"):
+        return True, 1  # zstipped
+    else:
+        return False, 0
 
 
 def recover(
@@ -233,6 +292,8 @@ def recover(
     recovered = 0
     gzipped = 0
     bzipped = 0
+    xzipped = 0
+    zstipped = 0
     skipped = 0
     missing = 0
 
@@ -279,10 +340,14 @@ def recover(
             is_gz,
         )
         if sha1_success:
-            if is_gz:
+            if tf.rel_path.endswith(".gz"):
                 gzipped += compressed_count
-            else:
+            elif tf.rel_path.endswith(".bz2"):
                 bzipped += compressed_count
+            elif tf.rel_path.endswith(".xz"):
+                xzipped += compressed_count
+            elif tf.rel_path.endswith(".zst"):
+                zstipped += compressed_count
             continue
 
         # 2) Find raw file for brute-force generation
@@ -300,10 +365,14 @@ def recover(
             is_gz,
         )
         if brute_force_success:
-            if is_gz:
+            if tf.rel_path.endswith(".gz"):
                 gzipped += compressed_count
-            else:
+            elif tf.rel_path.endswith(".bz2"):
                 bzipped += compressed_count
+            elif tf.rel_path.endswith(".xz"):
+                xzipped += compressed_count
+            elif tf.rel_path.endswith(".zst"):
+                zstipped += compressed_count
             continue
 
         missing += 1
@@ -312,6 +381,8 @@ def recover(
         recovered=recovered,
         gzipped=gzipped,
         bzipped=bzipped,
+        xzipped=xzipped,
+        zstipped=zstipped,
         skipped=skipped,
         missing=missing,
     )

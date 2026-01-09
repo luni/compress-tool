@@ -6,8 +6,11 @@ from pathlib import Path
 import pytest
 
 from torrent_compress_recovery.compressors import (
+    Bzip2Compressor,
     Compressor,
     GzipCompressor,
+    XzCompressor,
+    ZstdCompressor,
     get_compressor,
     register_compressor,
 )
@@ -93,6 +96,184 @@ class TestGzipCompressor:
             assert f.read() == binary_data
 
 
+class TestXzCompressor:
+    """Test XzCompressor implementation."""
+
+    def test_extension_property(self):
+        """Test that extension property returns correct value."""
+        compressor = XzCompressor()
+        assert compressor.extension == ".xz"
+
+    def test_compress_dry_run(self, tmp_path: Path):
+        """Test compress method in dry run mode."""
+        compressor = XzCompressor()
+        src = tmp_path / "test.txt"
+        dst = tmp_path / "test.txt.xz"
+
+        src.write_text("test content")
+
+        # Dry run should not create any files
+        compressor.compress(src, dst, dry_run=True)
+
+        assert not dst.exists()
+
+    def test_compress_actual(self, tmp_path: Path):
+        """Test actual compression if xz tool is available."""
+        import shutil
+
+        pytest.skip("xz tool not available") if not shutil.which("xz") else None
+
+        compressor = XzCompressor()
+        src = tmp_path / "test.txt"
+        dst = tmp_path / "subdir" / "test.txt.xz"
+
+        src.write_text("test content")
+
+        compressor.compress(src, dst, dry_run=False)
+
+        assert dst.exists()
+        assert dst.parent.exists()
+
+    def test_compress_creates_parent_directories(self, tmp_path: Path):
+        """Test that compress creates parent directories."""
+        import shutil
+
+        pytest.skip("xz tool not available") if not shutil.which("xz") else None
+
+        compressor = XzCompressor()
+        src = tmp_path / "test.txt"
+        dst = tmp_path / "nested" / "deep" / "test.txt.xz"
+
+        src.write_text("test content")
+
+        compressor.compress(src, dst, dry_run=False)
+
+        assert dst.exists()
+        assert dst.parent.exists()
+        assert dst.parent.parent.exists()
+
+    def test_compress_fallback_to_pixz(self, tmp_path: Path):
+        """Test fallback to pixz when xz is not available."""
+        import shutil
+
+        pytest.skip("Neither xz nor pixz available") if not (shutil.which("xz") or shutil.which("pixz")) else None
+
+        compressor = XzCompressor()
+        src = tmp_path / "test.txt"
+        dst = tmp_path / "test.txt.xz"
+
+        src.write_text("test content")
+
+        compressor.compress(src, dst, dry_run=False)
+
+        assert dst.exists()
+
+    def test_compress_no_tools_available(self, tmp_path: Path):
+        """Test error when neither xz nor pixz is available."""
+        import shutil
+
+        if shutil.which("xz") or shutil.which("pixz"):
+            pytest.skip("xz or pixz tool is available")
+
+        compressor = XzCompressor()
+        src = tmp_path / "test.txt"
+        dst = tmp_path / "test.txt.xz"
+
+        src.write_text("test content")
+
+        with pytest.raises(RuntimeError, match="Neither xz nor pixz is available"):
+            compressor.compress(src, dst, dry_run=False)
+
+
+class TestZstdCompressor:
+    """Test ZstdCompressor implementation."""
+
+    def test_extension_property(self):
+        """Test that extension property returns correct value."""
+        compressor = ZstdCompressor()
+        assert compressor.extension == ".zst"
+
+    def test_compress_dry_run(self, tmp_path: Path):
+        """Test compress method in dry run mode."""
+        compressor = ZstdCompressor()
+        src = tmp_path / "test.txt"
+        dst = tmp_path / "test.txt.zst"
+
+        src.write_text("test content")
+
+        # Dry run should not create any files
+        compressor.compress(src, dst, dry_run=True)
+
+        assert not dst.exists()
+
+    def test_compress_actual(self, tmp_path: Path):
+        """Test actual compression if zstd tool is available."""
+        import shutil
+
+        pytest.skip("zstd tool not available") if not shutil.which("zstd") else None
+
+        compressor = ZstdCompressor()
+        src = tmp_path / "test.txt"
+        dst = tmp_path / "subdir" / "test.txt.zst"
+
+        src.write_text("test content")
+
+        compressor.compress(src, dst, dry_run=False)
+
+        assert dst.exists()
+        assert dst.parent.exists()
+
+    def test_compress_creates_parent_directories(self, tmp_path: Path):
+        """Test that compress creates parent directories."""
+        import shutil
+
+        pytest.skip("zstd tool not available") if not shutil.which("zstd") else None
+
+        compressor = ZstdCompressor()
+        src = tmp_path / "test.txt"
+        dst = tmp_path / "nested" / "deep" / "test.txt.zst"
+
+        src.write_text("test content")
+
+        compressor.compress(src, dst, dry_run=False)
+
+        assert dst.exists()
+        assert dst.parent.exists()
+        assert dst.parent.parent.exists()
+
+    def test_compress_fallback_to_pzstd(self, tmp_path: Path):
+        """Test fallback to pzstd when zstd is not available."""
+        import shutil
+
+        pytest.skip("Neither zstd nor pzstd available") if not (shutil.which("zstd") or shutil.which("pzstd")) else None
+
+        compressor = ZstdCompressor()
+        src = tmp_path / "test.txt"
+        dst = tmp_path / "test.txt.zst"
+
+        src.write_text("test content")
+
+        compressor.compress(src, dst, dry_run=False)
+
+        assert dst.exists()
+
+    def test_compress_no_tools_available(self, tmp_path: Path):
+        """Test error when neither zstd nor pzstd is available."""
+        import shutil
+
+        if shutil.which("zstd") or shutil.which("pzstd"):
+            pytest.skip("zstd or pzstd tool is available")
+
+        compressor = ZstdCompressor()
+        src = tmp_path / "test.txt"
+        dst = tmp_path / "test.txt.zst"
+
+        src.write_text("test content")
+
+        with pytest.raises(RuntimeError, match="Neither zstd nor pzstd is available"):
+            compressor.compress(src, dst, dry_run=False)
+
+
 class TestCompressorRegistry:
     """Test compressor registry functions."""
 
@@ -100,6 +281,13 @@ class TestCompressorRegistry:
         """Test getting compressor for known extension."""
         compressor = get_compressor(".gz")
         assert isinstance(compressor, GzipCompressor)
+
+        # Test new compressors
+        xz_compressor = get_compressor(".xz")
+        assert isinstance(xz_compressor, XzCompressor)
+
+        zstd_compressor = get_compressor(".zst")
+        assert isinstance(zstd_compressor, ZstdCompressor)
 
     def test_get_compressor_unknown_extension(self):
         """Test getting compressor for unknown extension raises error."""
