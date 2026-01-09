@@ -13,6 +13,9 @@ BZIP2_MIN_LEVEL = 1
 BZIP2_MAX_LEVEL = 9
 BZIP2_LEVEL_BYTE_POS = 3  # Position of compression level byte in header
 
+# Bzip2 block sizes (100k * level)
+BZIP2_BLOCK_SIZES = {level: level * 100000 for level in range(BZIP2_MIN_LEVEL, BZIP2_MAX_LEVEL + 1)}
+
 
 @dataclass(frozen=True)
 class Bzip2Header:
@@ -23,6 +26,13 @@ class Bzip2Header:
     # Block size: 100k * level
     # No timestamp, filename, or other metadata like gzip
     level: int  # Compression level (1-9)
+    block_size: int  # Block size in bytes
+
+
+def _get_block_size_description(level: int) -> str:
+    """Get human-readable block size description."""
+    block_size = BZIP2_BLOCK_SIZES.get(level, 0)
+    return f"{block_size:,} bytes ({block_size / 1000:.0f} KB)"
 
 
 def parse_bzip2_header(path: Path) -> Bzip2Header | None:
@@ -37,12 +47,17 @@ def parse_bzip2_header(path: Path) -> Bzip2Header | None:
         return None
 
     level = int(data[BZIP2_LEVEL_BYTE_POS : BZIP2_LEVEL_BYTE_POS + 1].decode("ascii"))
-    return Bzip2Header(level=level)
+    block_size = BZIP2_BLOCK_SIZES.get(level, 0)
+    return Bzip2Header(level=level, block_size=block_size)
 
 
 def format_bzip2_header(header: Bzip2Header) -> str:
     """Return a human-readable summary of bzip2 header fields."""
-    return f"compression level: {header.level}"
+    lines = [
+        f"compression level: {header.level}",
+        f"block size: {_get_block_size_description(header.level)}",
+    ]
+    return "\n".join(lines)
 
 
 def patch_bzip2_header(data: bytes, header: Bzip2Header) -> bytes:

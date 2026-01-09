@@ -45,12 +45,19 @@ def test_parse_zstd_header(temp_dir: Path):
 
 def test_format_zstd_header():
     """Test formatting Zstd header for display."""
-    header = ZstdHeader(window_log=10, single_segment=False, has_checksum=True, has_dict_id=False)
+    header = ZstdHeader(window_log=10, single_segment=False, has_checksum=True, has_dict_id=False, has_reserved=False)
     out = format_zstd_header(header)
     assert "window_log: 10" in out
     assert "single_segment: False" in out
     assert "has_checksum: True" in out
     assert "has_dict_id: False" in out
+    assert "has_reserved: False" in out
+    assert "window_size:" in out
+
+    # Test with flags set
+    header_with_flags = ZstdHeader(window_log=15, single_segment=True, has_checksum=True, has_dict_id=True, has_reserved=False)
+    out_with_flags = format_zstd_header(header_with_flags)
+    assert "flag_names: SINGLE_SEGMENT, CHECKSUM, DICT_ID" in out_with_flags
 
 
 def test_patch_zstd_header(temp_dir: Path):
@@ -61,7 +68,7 @@ def test_patch_zstd_header(temp_dir: Path):
     data = zstd_magic + frame_header + b"some compressed data"
 
     # Create new header with window_log 11 (which is 0x0B in hex)
-    new_header = ZstdHeader(window_log=11, single_segment=True, has_checksum=False, has_dict_id=True)
+    new_header = ZstdHeader(window_log=11, single_segment=True, has_checksum=False, has_dict_id=True, has_reserved=False)
     patched = patch_zstd_header(data, new_header)
 
     # Check that frame header was updated - window_log should be in the lower 4 bits
@@ -80,7 +87,7 @@ def test_generate_zstd_candidates(temp_dir: Path):
     src = raw / "sample.txt"
     src.write_text("sample content")
 
-    header = ZstdHeader(window_log=10, single_segment=False, has_checksum=True, has_dict_id=False)
+    header = ZstdHeader(window_log=10, single_segment=False, has_checksum=True, has_dict_id=False, has_reserved=False)
     candidates = generate_zstd_candidates(src, header)
 
     # Should have at least some candidates
@@ -157,10 +164,38 @@ def test_parse_zstd_header_too_small(temp_dir: Path):
     assert header is None
 
 
+def test_zstd_header_usage_in_compression():
+    """Test that header information is actually used in compression."""
+    # Create minimal Zstd-like data
+    zstd_magic = b"\x28\xb5\x2f\xfd"  # Zstd magic
+    frame_header = b"\x00\x00"  # Simple frame header
+    data = zstd_magic + frame_header + b"some compressed data"
+
+    # Test different header settings produce different results
+    header1 = ZstdHeader(window_log=10, single_segment=True, has_checksum=True, has_dict_id=False, has_reserved=False)
+    header2 = ZstdHeader(window_log=15, single_segment=False, has_checksum=False, has_dict_id=True, has_reserved=False)
+
+    patched1 = patch_zstd_header(data, header1)
+    patched2 = patch_zstd_header(data, header2)
+
+    # Results should be different
+    assert patched1 != patched2
+    assert patched1[4:6] != patched2[4:6]
+
+    # Check specific bits are set correctly
+    # header1 should have single_segment (0x20) and checksum (0x10) flags
+    expected1 = (10 & 0x0F) | 0x20 | 0x10  # window_log + single_segment + checksum
+    assert patched1[4:6] == expected1.to_bytes(2, "little")
+
+    # header2 should have dict_id (0x08) flag
+    expected2 = (15 & 0x0F) | 0x08  # window_log + dict_id
+    assert patched2[4:6] == expected2.to_bytes(2, "little")
+
+
 def test_zstd_header_flags_parsing():
     """Test parsing different Zstd header flags."""
     # Test various flag combinations
-    header = ZstdHeader(window_log=15, single_segment=True, has_checksum=True, has_dict_id=False)
+    header = ZstdHeader(window_log=15, single_segment=True, has_checksum=True, has_dict_id=False, has_reserved=False)
     assert header.window_log == 15
     assert header.single_segment is True
     assert header.has_checksum is True

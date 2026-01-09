@@ -1,5 +1,6 @@
 """Step B: Verify raw files against compression trailers using last piece."""
 
+import subprocess  # nosec B404
 import zlib
 from pathlib import Path
 
@@ -85,9 +86,8 @@ def verify_raw_against_xz(raw_path: Path, xz_path: Path) -> bool:
     # For XZ, we'll do a basic check by decompressing and comparing
     # This is a simplified verification - real XZ verification is more complex
     try:
-        import subprocess  # nosec B404
         # Try to decompress and compare sizes
-        result = subprocess.run(["xz", "-dc", str(xz_path)], capture_output=True, check=True)  # nosec B603
+        result = subprocess.run(["/usr/bin/xz", "-dc", str(xz_path)], capture_output=True, check=True)  # nosec B603
         decompressed = result.stdout
         raw_data = raw_path.read_bytes()
         return decompressed == raw_data
@@ -119,9 +119,8 @@ def verify_raw_against_zst(raw_path: Path, zst_path: Path) -> bool:
     """Verify raw file matches Zstandard frame (basic validation)."""
     # For Zstd, we'll do a basic check by decompressing and comparing
     try:
-        import subprocess  # nosec B404
         # Try to decompress and compare sizes
-        result = subprocess.run(["zstd", "-dc", str(zst_path)], capture_output=True, check=True)  # nosec B603
+        result = subprocess.run(["/usr/bin/zstd", "-dc", str(zst_path)], capture_output=True, check=True)  # nosec B603
         decompressed = result.stdout
         raw_data = raw_path.read_bytes()
         return decompressed == raw_data

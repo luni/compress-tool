@@ -16,6 +16,12 @@ XZ_CRC32_SIZE = 4
 XZ_STREAM_FLAGS_NONE = 0
 XZ_STREAM_FLAGS_CRC64 = 1 << 0
 
+# XZ check types (for future expansion)
+XZ_CHECK_NONE = 0x00
+XZ_CHECK_CRC32 = 0x01
+XZ_CHECK_CRC64 = 0x04
+XZ_CHECK_SHA256 = 0x0A
+
 # Common compression levels for xz
 XZ_MIN_LEVEL = 0
 XZ_DEFAULT_LEVEL = 6
@@ -28,6 +34,26 @@ class XzHeader:
 
     flags: int  # Stream flags
     has_crc64: bool  # Whether CRC64 is enabled
+    check_type: int  # Check type (simplified)
+
+
+def _get_flag_names(flags: int) -> list[str]:
+    """Extract flag names from flag bitmask."""
+    flag_mappings = [
+        (XZ_STREAM_FLAGS_CRC64, "CRC64"),
+    ]
+    return [name for flag, name in flag_mappings if flags & flag]
+
+
+def _get_check_name(check_type: int) -> str:
+    """Get human-readable name for check type."""
+    check_names = {
+        XZ_CHECK_NONE: "NONE",
+        XZ_CHECK_CRC32: "CRC32",
+        XZ_CHECK_CRC64: "CRC64",
+        XZ_CHECK_SHA256: "SHA256",
+    }
+    return check_names.get(check_type, f"UNKNOWN({check_type})")
 
 
 def parse_xz_header(path: Path) -> XzHeader | None:
@@ -42,25 +68,31 @@ def parse_xz_header(path: Path) -> XzHeader | None:
     flags_bytes = data[6:8]
     flags = int.from_bytes(flags_bytes, "little")
 
-    # Check CRC32 (bytes 8-11)
-    stored_crc = int.from_bytes(data[8:12], "little")
-    calculated_crc = hashlib.sha256(data[:8]).digest()[:4]  # Simplified CRC check
-    calculated_crc_int = int.from_bytes(calculated_crc, "little")
+    # Extract check type from the second byte of stream flags
+    # Lower 4 bits are check type, upper bits are other flags
+    check_type = flags & 0x0F
+    stream_flags = flags & 0xF0
 
     # Note: This is a simplified CRC check - real XZ uses CRC32
     # For our purposes, we'll assume the header is valid if magic matches
 
-    has_crc64 = bool(flags & XZ_STREAM_FLAGS_CRC64)
+    has_crc64 = bool(stream_flags & XZ_STREAM_FLAGS_CRC64)
 
-    return XzHeader(flags=flags, has_crc64=has_crc64)
+    return XzHeader(flags=flags, has_crc64=has_crc64, check_type=check_type)
 
 
 def format_xz_header(header: XzHeader) -> str:
     """Return a human-readable summary of XZ header fields."""
     lines = [
         f"flags: {header.flags:08x}",
+        f"check_type: {_get_check_name(header.check_type)}",
         f"has_crc64: {header.has_crc64}",
     ]
+
+    flag_names = _get_flag_names(header.flags)
+    if flag_names:
+        lines.append(f"flag_names: {', '.join(flag_names)}")
+
     return "\n".join(lines)
 
 
@@ -84,20 +116,18 @@ def sha1_piece(data: bytes) -> bytes:
     return hashlib.sha1(data).digest()
 
 
-def _generate_header_match_candidate(src_bytes: bytes, header: XzHeader) -> tuple[str, bytes]:
+def _generate_header_match_candidate(src_bytes: bytes, header: XzHeader) -> tuple[str, bytes] | None:
     """Generate a candidate that matches the exact header settings."""
     with tempfile.NamedTemporaryFile(delete=False) as tmp:
         tmp_path = Path(tmp.name)
         try:
             # Use xz command to compress
             cmd = ["xz", "-c", "--stdout"]
-            proc = subprocess.run(cmd, input=src_bytes, capture_output=True)  # nosec B603
+            proc = subprocess.run(cmd, input=src_bytes, capture_output=True, check=False)  # nosec B603
             if proc.returncode == 0:
                 data = proc.stdout
                 data = patch_xz_header(data, header)
                 return ("header_match", data)
-        except (FileNotFoundError, subprocess.CalledProcessError):
-            pass
         finally:
             tmp_path.unlink()
     return None

@@ -8,7 +8,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .bencode import parse_torrent
-from .bz2 import sha1_piece
+from .bz2 import find_matching_candidate as find_bzip2_candidate
+from .bz2 import generate_bzip2_candidates, parse_bzip2_header, sha1_piece
+from .gzip import find_matching_candidate as find_gzip_candidate
+from .gzip import generate_gzip_candidates, parse_gzip_header
+from .xz import find_matching_candidate as find_xz_candidate
+from .xz import generate_xz_candidates, parse_xz_header
+from .zst import find_matching_candidate as find_zstd_candidate
+from .zst import generate_zstd_candidates, parse_zstd_header
 
 
 def iter_files(root: Path) -> Iterable[Path]:
@@ -139,20 +146,12 @@ def _parse_header_from_partial(tf, expected_name: str, partial_index, is_gz: boo
         return None
 
     if is_gz:
-        from .gzip import parse_gzip_header
-
         return parse_gzip_header(chosen)
     elif tf.rel_path.endswith(".bz2"):
-        from .bz2 import parse_bzip2_header
-
         return parse_bzip2_header(chosen)
     elif tf.rel_path.endswith(".xz"):
-        from .xz import parse_xz_header
-
         return parse_xz_header(chosen)
     elif tf.rel_path.endswith(".zst"):
-        from .zst import parse_zstd_header
-
         return parse_zstd_header(chosen)
     else:
         return None
@@ -173,25 +172,17 @@ def _try_sha1_match(
             if file_hash == tf.sha1:
                 # Found exact match by SHA1, compress it
                 if is_gz:
-                    from .gzip import generate_gzip_candidates, find_matching_candidate as find_gzip_candidate
-
                     candidates = generate_gzip_candidates(raw_path, header)
                     match_func = find_gzip_candidate
                 elif tf.rel_path.endswith(".bz2"):
-                    from .bz2 import generate_bzip2_candidates, find_matching_candidate
-
                     candidates = generate_bzip2_candidates(raw_path, header)
-                    match_func = find_matching_candidate
+                    match_func = find_bzip2_candidate
                 elif tf.rel_path.endswith(".xz"):
-                    from .xz import generate_xz_candidates, find_matching_candidate
-
                     candidates = generate_xz_candidates(raw_path, header)
-                    match_func = find_matching_candidate
+                    match_func = find_xz_candidate
                 elif tf.rel_path.endswith(".zst"):
-                    from .zst import generate_zstd_candidates, find_matching_candidate
-
                     candidates = generate_zstd_candidates(raw_path, header)
-                    match_func = find_matching_candidate
+                    match_func = find_zstd_candidate
                 else:
                     return False, 0
 
@@ -227,25 +218,17 @@ def _try_brute_force_recovery(
 
     # Generate candidates and find one that matches the first piece hash
     if is_gz:
-        from .gzip import generate_gzip_candidates, find_matching_candidate as find_gzip_candidate
-
         candidates = generate_gzip_candidates(raw_src, header)
         match_func = find_gzip_candidate
     elif tf.rel_path.endswith(".bz2"):
-        from .bz2 import generate_bzip2_candidates, find_matching_candidate
-
         candidates = generate_bzip2_candidates(raw_src, header)
-        match_func = find_matching_candidate
+        match_func = find_bzip2_candidate
     elif tf.rel_path.endswith(".xz"):
-        from .xz import generate_xz_candidates, find_matching_candidate
-
         candidates = generate_xz_candidates(raw_src, header)
-        match_func = find_matching_candidate
+        match_func = find_xz_candidate
     elif tf.rel_path.endswith(".zst"):
-        from .zst import generate_zstd_candidates, find_matching_candidate
-
         candidates = generate_zstd_candidates(raw_src, header)
-        match_func = find_matching_candidate
+        match_func = find_zstd_candidate
     else:
         return False, 0
 

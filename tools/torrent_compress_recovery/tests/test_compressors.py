@@ -96,6 +96,59 @@ class TestGzipCompressor:
             assert f.read() == binary_data
 
 
+class TestBzip2Compressor:
+    """Test Bzip2Compressor."""
+
+    def test_extension_property(self):
+        """Test extension property."""
+        compressor = Bzip2Compressor()
+        assert compressor.extension == ".bz2"
+
+    def test_compress_dry_run(self, tmp_path: Path):
+        """Test dry run compression."""
+        compressor = Bzip2Compressor()
+        src = tmp_path / "test.txt"
+        src.write_text("test content")
+        dst = tmp_path / "test.txt.bz2"
+
+        # Dry run should not create file
+        compressor.compress(src, dst, dry_run=True)
+        assert not dst.exists()
+
+    def test_compress_actual(self, tmp_path: Path):
+        """Test actual compression."""
+        compressor = Bzip2Compressor()
+        src = tmp_path / "test.txt"
+        src.write_text("test content")
+        dst = tmp_path / "test.txt.bz2"
+
+        compressor.compress(src, dst, dry_run=False)
+        assert dst.exists()
+        assert dst.stat().st_size > 0
+
+    def test_compress_creates_parent_directories(self, tmp_path: Path):
+        """Test that parent directories are created."""
+        compressor = Bzip2Compressor()
+        src = tmp_path / "test.txt"
+        src.write_text("test content")
+        dst = tmp_path / "subdir" / "test.txt.bz2"
+
+        compressor.compress(src, dst, dry_run=False)
+        assert dst.exists()
+
+    def test_compress_with_binary_content(self, tmp_path: Path):
+        """Test compression with binary content."""
+        compressor = Bzip2Compressor()
+        src = tmp_path / "test.bin"
+        binary_data = bytes(range(256))
+        src.write_bytes(binary_data)
+        dst = tmp_path / "test.bin.bz2"
+
+        compressor.compress(src, dst, dry_run=False)
+        assert dst.exists()
+        assert dst.stat().st_size > 0
+
+
 class TestXzCompressor:
     """Test XzCompressor implementation."""
 

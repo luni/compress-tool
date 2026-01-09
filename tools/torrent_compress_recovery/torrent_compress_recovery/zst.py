@@ -18,6 +18,11 @@ ZSTD_FRAME_HEADER_WINDOWLOG_MASK = 0x0F
 ZSTD_FRAME_HEADER_SINGLE_SEGMENT_FLAG = 0x20
 ZSTD_FRAME_HEADER_CHECKSUM_FLAG = 0x10
 ZSTD_FRAME_HEADER_DICT_ID_FLAG = 0x08
+ZSTD_FRAME_HEADER_RESERVED_FLAG = 0x02
+
+# Zstandard content checksum types
+ZSTD_CONTENT_CHECKSUM_NONE = 0
+ZSTD_CONTENT_CHECKSUM_CRC32 = 1
 
 # Common compression levels for zstd
 ZSTD_MIN_LEVEL = 1
@@ -33,6 +38,26 @@ class ZstdHeader:
     single_segment: bool  # Single segment flag
     has_checksum: bool  # Whether content checksum is enabled
     has_dict_id: bool  # Whether dictionary ID is present
+    has_reserved: bool  # Whether reserved flag is set
+
+
+def _get_flag_names(frame_header: int) -> list[str]:
+    """Extract flag names from frame header bitmask."""
+    flag_mappings = [
+        (ZSTD_FRAME_HEADER_SINGLE_SEGMENT_FLAG, "SINGLE_SEGMENT"),
+        (ZSTD_FRAME_HEADER_CHECKSUM_FLAG, "CHECKSUM"),
+        (ZSTD_FRAME_HEADER_DICT_ID_FLAG, "DICT_ID"),
+        (ZSTD_FRAME_HEADER_RESERVED_FLAG, "RESERVED"),
+    ]
+    return [name for flag, name in flag_mappings if frame_header & flag]
+
+
+def _get_window_size(window_log: int) -> str:
+    """Get human-readable window size from window log."""
+    if window_log == 0:
+        return "N/A (single segment)"
+    window_size = 1 << window_log
+    return f"{window_size} bytes ({window_size / 1024:.1f} KB)"
 
 
 def parse_zstd_header(path: Path) -> ZstdHeader | None:
@@ -54,23 +79,40 @@ def parse_zstd_header(path: Path) -> ZstdHeader | None:
     single_segment = bool(frame_header & ZSTD_FRAME_HEADER_SINGLE_SEGMENT_FLAG)
     has_checksum = bool(frame_header & ZSTD_FRAME_HEADER_CHECKSUM_FLAG)
     has_dict_id = bool(frame_header & ZSTD_FRAME_HEADER_DICT_ID_FLAG)
+    has_reserved = bool(frame_header & ZSTD_FRAME_HEADER_RESERVED_FLAG)
 
     return ZstdHeader(
         window_log=window_log,
         single_segment=single_segment,
         has_checksum=has_checksum,
         has_dict_id=has_dict_id,
+        has_reserved=has_reserved,
     )
 
 
 def format_zstd_header(header: ZstdHeader) -> str:
-    """Return a human-readable summary of Zstandard header fields."""
+    """Return a human-readable summary of Zstd header fields."""
     lines = [
         f"window_log: {header.window_log}",
+        f"window_size: {_get_window_size(header.window_log)}",
         f"single_segment: {header.single_segment}",
         f"has_checksum: {header.has_checksum}",
         f"has_dict_id: {header.has_dict_id}",
+        f"has_reserved: {header.has_reserved}",
     ]
+
+    # Add flag names if any flags are set
+    if header.single_segment or header.has_checksum or header.has_dict_id or header.has_reserved:
+        frame_header = header.window_log | (
+            (ZSTD_FRAME_HEADER_SINGLE_SEGMENT_FLAG if header.single_segment else 0)
+            | (ZSTD_FRAME_HEADER_CHECKSUM_FLAG if header.has_checksum else 0)
+            | (ZSTD_FRAME_HEADER_DICT_ID_FLAG if header.has_dict_id else 0)
+            | (ZSTD_FRAME_HEADER_RESERVED_FLAG if header.has_reserved else 0)
+        )
+        flag_names = _get_flag_names(frame_header)
+        if flag_names:
+            lines.append(f"flag_names: {', '.join(flag_names)}")
+
     return "\n".join(lines)
 
 
@@ -100,20 +142,18 @@ def sha1_piece(data: bytes) -> bytes:
     return hashlib.sha1(data).digest()
 
 
-def _generate_header_match_candidate(src_bytes: bytes, header: ZstdHeader) -> tuple[str, bytes]:
+def _generate_header_match_candidate(src_bytes: bytes, header: ZstdHeader) -> tuple[str, bytes] | None:
     """Generate a candidate that matches the exact header settings."""
     with tempfile.NamedTemporaryFile(delete=False) as tmp:
         tmp_path = Path(tmp.name)
         try:
             # Use zstd command to compress
             cmd = ["zstd", "-c", "--stdout"]
-            proc = subprocess.run(cmd, input=src_bytes, capture_output=True)  # nosec B603
+            proc = subprocess.run(cmd, input=src_bytes, capture_output=True, check=False)  # nosec B603
             if proc.returncode == 0:
                 data = proc.stdout
                 data = patch_zstd_header(data, header)
                 return ("header_match", data)
-        except (FileNotFoundError, subprocess.CalledProcessError):
-            pass
         finally:
             tmp_path.unlink()
     return None

@@ -20,6 +20,55 @@ def test_bstr_none_value():
     assert result is None
 
 
+def test_bstr_missing_key():
+    """Test _bstr with missing key."""
+    result = _bstr({}, b"missing_key")
+    assert result is None
+
+
+def test_bstr_empty_dict():
+    """Test _bstr with empty dictionary."""
+    result = _bstr({}, b"any_key")
+    assert result is None
+
+
+def test_parse_torrent_invalid_bencode(tmp_path: Path):
+    """Test parsing torrent with invalid bencode data."""
+    invalid_file = tmp_path / "invalid.torrent"
+    invalid_file.write_bytes(b"invalid bencode data")
+
+    with pytest.raises(BencodeError):
+        parse_torrent(invalid_file)
+
+
+def test_parse_torrent_empty_file(tmp_path: Path):
+    """Test parsing torrent with empty file."""
+    empty_file = tmp_path / "empty.torrent"
+    empty_file.write_bytes(b"")
+
+    with pytest.raises(BencodeError):
+        parse_torrent(empty_file)
+
+
+def test_torrent_file_repr():
+    """Test TorrentFile string representation."""
+    tf = TorrentFile(rel_path="test/file.txt", length=200, offset=100)
+    repr_str = repr(tf)
+    assert "TorrentFile" in repr_str
+    assert "offset=100" in repr_str
+    assert "length=200" in repr_str
+
+
+def test_torrent_meta_repr():
+    """Test TorrentMeta string representation."""
+    meta = TorrentMeta(
+        name="test", piece_length=524288, pieces=[b"hash1", b"hash2"], files=[TorrentFile(rel_path="test.txt", length=100, offset=0)], version="v1"
+    )
+    repr_str = repr(meta)
+    assert "TorrentMeta" in repr_str
+    assert "piece_length=524288" in repr_str
+
+
 def test_bstr_non_bytes_value():
     """Test _bstr with non-bytes value."""
     result = _bstr({b"key": 123}, b"key")
