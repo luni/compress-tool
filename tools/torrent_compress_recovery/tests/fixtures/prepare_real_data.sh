@@ -199,7 +199,6 @@ for name in padding.txt real1.txt real2.txt; do
     gzip -n -6 -c "$PADDING_RAW_DIR/$name" > "$PADDING_COMPRESSED_DIR/$name.gz"
 done
 
-cd "$(dirname "$0")/../.."
 uv run torrentfile create \
     --announce "http://localhost:6969/announce" \
     --piece-length 16 \
@@ -215,7 +214,6 @@ echo "Medium pieces torrent: $OVERLAP_DIR/overlap_medium_pieces.torrent"
 echo "Padding offset torrent: $PADDING_DIR/padding_offset.torrent"
 
 # Create torrent using torrentfile CLI (supports v1, v2, and hybrid)
-cd "$(dirname "$0")/../.."
 
 # Create a temporary directory with only the compressed files for torrentfile
 COMPRESSED_ONLY_DIR="$DATA_DIR/compressed_only_temp"
