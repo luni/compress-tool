@@ -129,9 +129,13 @@ def test_cli_entrypoint_integration(integration_dir, gz_files_cli, partial_gz_fi
         "--project",
         str(integration_dir.parent.parent),
         "torrent-compress-recovery",
+        "--torrent",
         str(torrent_single_file),
+        "--raw-dir",
         str(integration_dir / "raw"),
+        "--partial-dir",
         str(integration_dir / "partial"),
+        "--target-dir",
         str(target),
         "--dry-run",
     ]

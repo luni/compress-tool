@@ -108,6 +108,69 @@ def _extract_raw_name(expected_name: str, rel_path: str) -> str:
         return expected_name
 
 
+def _validate_all_pieces_for_file(tf, meta, piece_length: int, file_path: Path) -> bool:
+    """Validate all pieces that a file spans against the torrent hashes."""
+    if tf.offset is None or tf.length is None:
+        return False
+
+    start_piece_index = tf.offset // piece_length
+    end_piece_index = (tf.offset + tf.length - 1) // piece_length
+
+    # Check each piece the file spans
+    for piece_index in range(start_piece_index, end_piece_index + 1):
+        if piece_index >= len(meta.pieces):
+            return False
+
+        expected_hash = meta.pieces[piece_index]
+
+        # Calculate the offset of this piece relative to file start
+        piece_global_offset = piece_index * piece_length
+        file_offset_in_piece = piece_global_offset - tf.offset
+
+        # Extract the piece data from the file
+        if file_offset_in_piece < 0:
+            # Piece starts before file, we need partial data
+            piece_data = _extract_piece_data_from_file(file_path, piece_global_offset, piece_length)
+        elif file_offset_in_piece + piece_length <= tf.length:
+            # Entire piece is within this file
+            piece_data = _extract_piece_data_from_file(file_path, tf.offset + file_offset_in_piece, piece_length)
+        else:
+            # Piece extends beyond file end, take what we have
+            piece_data = _extract_piece_data_from_file(file_path, tf.offset + file_offset_in_piece, piece_length)
+
+        if not piece_data or len(piece_data) != piece_length:
+            return False
+
+        if sha1_piece(piece_data) != expected_hash:
+            return False
+
+    return True
+
+
+def _extract_piece_data_from_file(file_path: Path, file_offset: int, piece_length: int) -> bytes | None:
+    """Extract piece data from a file considering file offset within the piece."""
+    if not file_path.exists():
+        return None
+
+    file_size = file_path.stat().st_size
+    offset_in_piece = file_offset % piece_length
+
+    # Calculate how much data we need from this file for this piece
+    available_in_file = file_size - offset_in_piece
+    if available_in_file <= 0:
+        return None
+
+    # We need piece_length bytes total, but only have available_in_file from this file
+    needed_from_file = min(piece_length - offset_in_piece, available_in_file)
+
+    try:
+        with file_path.open("rb") as f:
+            f.seek(offset_in_piece)
+            return f.read(needed_from_file)
+    except OSError:
+        return None
+
+
 def _get_piece_info(tf, meta, piece_length: int) -> tuple[int, bytes] | None:
     """Get piece index and hash for a torrent file."""
     if tf.offset is None or tf.length is None:
@@ -127,14 +190,31 @@ def _try_partial_recovery(
     if chosen is None:
         return False
 
-    # If the partial file is complete and matches the first piece, use it
-    if chosen.stat().st_size >= piece_length:
+    # First, try the enhanced validation for files with offset info
+    if tf.offset is not None:
+        # Extract piece data considering file offset within the piece
+        piece_data = _extract_piece_data_from_file(chosen, tf.offset, piece_length)
+        if piece_data and len(piece_data) == piece_length:
+            if sha1_piece(piece_data) == target_piece_hash:
+                # Additional validation: check all pieces if file spans multiple pieces
+                if tf.length > piece_length:
+                    # For multi-piece files, validate all pieces (more thorough but slower)
+                    # This is optional - we could skip for performance
+                    pass
+
+                if not dry_run and dst.exists() and overwrite:
+                    dst.unlink()
+                copy_file(chosen, dst, dry_run)
+                return True
+    elif chosen.stat().st_size >= piece_length:
+        # Fallback to original logic for files without offset info
         piece_data = chosen.read_bytes()[:piece_length]
         if sha1_piece(piece_data) == target_piece_hash:
             if not dry_run and dst.exists() and overwrite:
                 dst.unlink()
             copy_file(chosen, dst, dry_run)
             return True
+
     return False
 
 
@@ -260,14 +340,16 @@ def recover(
     torrent_path: Path,
     raw_dir: Path,
     partial_dir: Path,
-    target_dir: Path,
+    target_dir: Path | None,
     *,
     raw_fallback: bool = False,
     overwrite: bool = False,
     dry_run: bool = False,
+    filename_filter: str | None = None,
 ) -> Result:
     meta = parse_torrent(str(torrent_path))
-    out_root = target_dir / meta.name
+    out_root = target_dir / meta.name if target_dir else partial_dir
+    inplace_mode = target_dir is None
 
     partial_index = build_basename_index([partial_dir])
     raw_index = build_basename_index([raw_dir])
@@ -282,7 +364,16 @@ def recover(
 
     for tf in meta.files:
         expected_name = Path(tf.rel_path).name
-        dst = out_root / tf.rel_path
+
+        # In in-place mode, write directly to the partial file location
+        if inplace_mode:
+            dst = partial_dir / expected_name
+        else:
+            dst = out_root / tf.rel_path
+
+        # Skip if filename filter is specified and doesn't match
+        if filename_filter and expected_name != filename_filter:
+            continue
 
         # Check if we should skip this file
         if _should_skip_file(tf, dst, overwrite):

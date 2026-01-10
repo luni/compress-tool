@@ -38,10 +38,34 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Step C: Enable brute-force candidate generation (default: enabled in reproduce mode)",
     )
-    ap.add_argument("torrent", type=Path)
-    ap.add_argument("raw_dir", type=Path, help="Folder containing uncompressed raw data")
-    ap.add_argument("partial_dir", type=Path, help="Folder containing partially/fully downloaded compressed files")
-    ap.add_argument("target_dir", type=Path, help="Output folder")
+    ap.add_argument(
+        "--torrent",
+        type=Path,
+        required=True,
+        help="Path to the .torrent file",
+    )
+    ap.add_argument(
+        "--raw-dir",
+        type=Path,
+        required=True,
+        help="Folder containing uncompressed raw data",
+    )
+    ap.add_argument(
+        "--partial-dir",
+        type=Path,
+        required=True,
+        help="Folder containing partially/fully downloaded compressed files",
+    )
+    ap.add_argument(
+        "--target-dir",
+        type=Path,
+        help="Output folder (optional - if not specified, files will be recovered in-place in partial-dir)",
+    )
+    ap.add_argument(
+        "--filename",
+        type=str,
+        help="Process only this specific filename (basename match)",
+    )
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument(
         "--raw-fallback",
@@ -60,6 +84,9 @@ def main(argv: list[str] | None = None) -> int:
         # Step A: display gzip header info for partial files
         for p in args.partial_dir.rglob("*"):
             if p.is_file():
+                # Skip if filename filter is specified and doesn't match
+                if args.filename and p.name != args.filename:
+                    continue
                 header = parse_gzip_header(p)
                 if header is None:
                     continue
@@ -87,10 +114,11 @@ def main(argv: list[str] | None = None) -> int:
         raw_fallback=args.raw_fallback,
         overwrite=args.overwrite,
         dry_run=args.dry_run,
+        filename_filter=args.filename,
     )
 
     torrent_name = args.torrent.stem
-    out_root = args.target_dir / torrent_name
+    out_root = args.target_dir / torrent_name if args.target_dir else args.partial_dir
     logging.info(f"torrent: {torrent_name}")
     logging.info(f"output:  {out_root}")
     logging.info(f"recovered_from_partial: {result.recovered}")
